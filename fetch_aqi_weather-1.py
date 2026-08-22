@@ -23,13 +23,14 @@ Requires:
     (the same service account key works for BigQuery if it has the right role,
     otherwise generate a separate key from IAM & Admin > Service Accounts)
 """
- 
 import os
 import json
 import requests
 from datetime import datetime, timezone
 from google.cloud import bigquery
- 
+from dotenv import load_dotenv
+
+load_dotenv()
 # ---- CONFIG ----
 os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", "firebase-key.json")
  
@@ -37,7 +38,7 @@ PROJECT_ID = "carc-f5b14"   # <-- replace with your actual project id
 DATASET_ID = "air_quality"
 TABLE_ID = "aqi_readings"
 WEATHER_TABLE_ID = "weather_readings"
-OPENAQ_API_KEY = "f8a04510cf2ecb447233f89cc674759d3211d9162e94f1fbc003fbc60c5f100d"   # <-- get a free key at explore.openaq.org
+OPENAQ_API_KEY = os.environ.get("OPENAQ_API_KEY") # <-- get a free key at explore.openaq.org
  
 REGIONS = {
     "Delhi-NCR":    {"lat": 28.6139, "lon": 77.2090, "radius_km": 60},
