@@ -216,4 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+firebase-key.json
+.env
+__pycache__/
+*.pyc
+.DS_Store
 serviceAccountKey.json
