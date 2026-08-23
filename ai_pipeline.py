@@ -113,7 +113,7 @@ def get_report_from_firestore(collection_name: str, doc_id: str) -> Optional[Dic
             print(f"Error: Document {doc_id} has no data")
             return None
         photo_url = data.get("photo_url")
-        user_text = data.get("user_text", "")
+        user_text = data.get("text", "")
 
         if not photo_url:
             print(f"Error: Document {doc_id} has no photo_url")
@@ -138,34 +138,34 @@ def download_image(photo_url: str) -> Optional[bytes]:
         return None
 
 # # --- Example Usage for Testing ---
-if __name__ == "__main__":
-    # Test with a dummy image and text from firestore and cloudinary
-    collection_name = "citizen_reports"  # Firestore collection for citizen reports
-    sample_doc_id = "2FfEgs63sJd0mY7L9mKg" # Firestore document ID to test with
-    doc_ref = db.collection(collection_name).document(sample_doc_id)
-    doc = doc_ref.get()
+# if __name__ == "__main__":
+#     # Test with a dummy image and text from firestore and cloudinary
+#     collection_name = "citizen_reports"  # Firestore collection for citizen reports
+#     sample_doc_id = "2FfEgs63sJd0mY7L9mKg" # Firestore document ID to test with
+#     doc_ref = db.collection(collection_name).document(sample_doc_id)
+#     doc = doc_ref.get()
 
-    data = doc.to_dict()
-    if data is None:
-        print(f"Error: Document {sample_doc_id} has no data")
-        exit(1)
+#     data = doc.to_dict()
+#     if data is None:
+#         print(f"Error: Document {sample_doc_id} has no data")
+#         exit(1)
 
-    sample_text = data.get("text", "")
+#     sample_text = data.get("text", "")
 
-    sample_photo_url_cloudinary = data.get("photo_url")
-    if not sample_photo_url_cloudinary:
-        print(f"Error: Document {sample_doc_id} has no photo_url")
-        exit(1)
+#     sample_photo_url_cloudinary = data.get("photo_url")
+#     if not sample_photo_url_cloudinary:
+#         print(f"Error: Document {sample_doc_id} has no photo_url")
+#         exit(1)
         
-    sample_image = download_image(sample_photo_url_cloudinary)
+#     sample_image = download_image(sample_photo_url_cloudinary)
     
-    if sample_image is not None:
-        result_json = analyze_citizen_report(sample_image, sample_text)
-        print (f"Gemini Analysis Result: {result_json}")
-        if result_json:
-            save_to_firestore(collection_name, sample_doc_id, result_json.model_dump())
-    else:
-        print(f"Please place a sample image named '{sample_image}' in your directory to test!")
+#     if sample_image is not None:
+#         result_json = analyze_citizen_report(sample_image, sample_text)
+#         print (f"Gemini Analysis Result: {result_json}")
+#         if result_json:
+#             save_to_firestore(collection_name, sample_doc_id, result_json.model_dump())
+#     else:
+#         print(f"Please place a sample image named '{sample_image}' in your directory to test!")
 
 def process_and_save_report(doc_id: str, collection_name: str) -> Dict[str, Any]:
     report_data = get_report_from_firestore(collection_name, doc_id)
