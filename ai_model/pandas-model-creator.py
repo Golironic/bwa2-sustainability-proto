@@ -91,13 +91,13 @@ except Exception as e:
 
 # 6. Predict Future AQI (e.g., Next Hour Prediction)
 # Example feature input: Hour=14, Day=Monday(0), Temp=32°C, Humidity=65%
-try:
-    if model is None:
-        raise ValueError("Model is not trained. Cannot make predictions.")
+# try:
+#     if model is None:
+#         raise ValueError("Model is not trained. Cannot make predictions.")
     
-    sample_input = pd.DataFrame([[14, 0, 1, 32.0, 65.0, 1, 10.0, 180.0]], columns=['hour', 'dayofweek', 'month', 'temperature_aqi', 'humidity_aqi', 'region', 'wind_speed_aqi', 'wind_direction_aqi'])
-    predicted_aqi = float(model.predict(sample_input)[0])
+#     sample_input = pd.DataFrame([[14, 0, 1, 32.0, 65.0, 1, 10.0, 180.0]], columns=['hour', 'dayofweek', 'month', 'temperature_aqi', 'humidity_aqi', 'region', 'wind_speed_aqi', 'wind_direction_aqi'])
+#     predicted_aqi = float(model.predict(sample_input)[0])
 
-    print(f"Predicted AQI: {predicted_aqi:.2f}")
-except Exception as e:
-    print(f" Error predicting AQI: {e}")
+#     print(f"Predicted AQI: {predicted_aqi:.2f}")
+# except Exception as e:
+#     print(f" Error predicting AQI: {e}")
