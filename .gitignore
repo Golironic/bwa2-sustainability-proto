@@ -217,9 +217,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 serviceAccountKey.json
-aqi_xgboost_model.json
 vertex-ai.py
 aqi_weather_historical.csv
 local-mock-csv-creator.py
-pandas-model.py
 bwa2-sustainability-proto myworkspace.code-workspace
