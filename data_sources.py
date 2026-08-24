@@ -10,28 +10,69 @@ import pandas as pd
 import mock_data
 
 # --- Flip this to False on Day 2 evening once real data is flowing ---
-USE_MOCK = True
+USE_MOCK = False
 
 # Fill these in when USE_MOCK = False
 FIREBASE_KEY_PATH = "firebase-key.json"   # Person 1 shares this file with you
-BQ_PROJECT_ID = "your-gcp-project-id"
+BQ_PROJECT_ID = "carc-f5b14"
 BQ_DATASET = "air_quality"
+
+# Cloudinary handles photo/voice uploads (Firestore/BigQuery stay on Google —
+# Cloudinary only replaces Firebase Storage, not the databases). Get these
+# three values from your Cloudinary dashboard (cloudinary.com/console).
+# Keep CLOUDINARY_API_SECRET out of git the same way you keep
+# firebase-key.json out — see the .gitignore note in the README.
+CLOUDINARY_CLOUD_NAME = "eycdofm4"
+CLOUDINARY_API_KEY = "631999741599272"
+CLOUDINARY_API_SECRET = "vY49GdAFIx1S52RUBg1okGSjw9k"
 
 
 @st.cache_resource
 def _get_firestore_client():
     import firebase_admin
-    from firebase_admin import credentials, firestore, storage
+    from firebase_admin import credentials, firestore
     if not firebase_admin._apps:
         cred = credentials.Certificate(FIREBASE_KEY_PATH)
-        firebase_admin.initialize_app(cred, {"storageBucket": f"{BQ_PROJECT_ID}.appspot.com"})
+        firebase_admin.initialize_app(cred)
     return firestore.client()
 
 
 @st.cache_resource
 def _get_bq_client():
     from google.cloud import bigquery
-    return bigquery.Client(project=BQ_PROJECT_ID)
+    from google.oauth2 import service_account
+    credentials = service_account.Credentials.from_service_account_file(FIREBASE_KEY_PATH)
+    return bigquery.Client(project=BQ_PROJECT_ID, credentials=credentials)
+
+
+def _safe_bq_query(client, query, table_label, warn_if_empty=True):
+    """Runs a BigQuery query, returning an empty DataFrame (with a
+    lightweight on-screen note) instead of crashing the whole app if the
+    target table doesn't exist yet. Expected mid-hackathon when a
+    teammate's pipeline hasn't populated its table yet (e.g. `forecast`
+    depends on Person 2's Vertex AI job landing on Day 2). Any other
+    BigQuery error (bad field name, permissions, etc.) still raises
+    normally, since those need fixing rather than hiding.
+
+    Also flags the case where the query runs fine but matches zero rows
+    (table exists, but nothing recent) — this used to fail silently and
+    just show up as "0" everywhere with no explanation.
+    """
+    from google.api_core.exceptions import NotFound
+    try:
+        df = client.query(query).to_dataframe()
+    except NotFound:
+        st.warning(f"BigQuery table for `{table_label}` wasn't found yet — showing empty data until it's built.", icon="⏳")
+        return pd.DataFrame()
+    if warn_if_empty and df.empty:
+        st.info(
+            f"`{table_label}` query ran fine but matched 0 rows. The table exists, "
+            "but nothing in it falls inside the query's time window — check that the "
+            "pipeline is actually writing recent rows, and that timestamps are stored "
+            "in UTC (a common bug is writing local time and treating it as UTC).",
+            icon="ℹ️",
+        )
+    return df
 
 
 @st.cache_data(ttl=60)
@@ -40,12 +81,12 @@ def get_aqi_readings():
         return mock_data.get_mock_aqi_readings()
     client = _get_bq_client()
     query = f"""
-        SELECT station_id, location.lat AS lat, location.lon AS lon,
+        SELECT station_id, location.lat AS lat, location.lng AS lon,
                timestamp, pm25, pm10, aqi_value, source
         FROM `{BQ_PROJECT_ID}.{BQ_DATASET}.aqi_readings`
         WHERE timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 6 HOUR)
     """
-    return client.query(query).to_dataframe()
+    return _safe_bq_query(client, query, "aqi_readings")
 
 
 @st.cache_data(ttl=60)
@@ -59,7 +100,7 @@ def get_fire_hotspots():
         FROM `{BQ_PROJECT_ID}.{BQ_DATASET}.fire_hotspots`
         WHERE timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
     """
-    return client.query(query).to_dataframe()
+    return _safe_bq_query(client, query, "fire_hotspots")
 
 
 @st.cache_data(ttl=30)
@@ -79,7 +120,7 @@ def get_citizen_reports():
         loc = d.get("location", {}) or {}
         ai = d.get("ai_analysis", {}) or {}
         lat = loc.get("lat") if isinstance(loc, dict) else getattr(loc, "latitude", None)
-        lon = loc.get("lon") if isinstance(loc, dict) else getattr(loc, "longitude", None)
+        lon = loc.get("lng") if isinstance(loc, dict) else getattr(loc, "longitude", None)
         rows.append({
             "id": doc.id,
             "lat": lat,
@@ -108,7 +149,7 @@ def get_forecast():
         FROM `{BQ_PROJECT_ID}.{BQ_DATASET}.forecast`
         ORDER BY forecast_timestamp
     """
-    return client.query(query).to_dataframe()
+    return _safe_bq_query(client, query, "forecast", warn_if_empty=False)
 
 
 def submit_citizen_report(report: dict, photo_file=None, voice_file=None):
@@ -121,17 +162,43 @@ def submit_citizen_report(report: dict, photo_file=None, voice_file=None):
 
     db = _get_firestore_client()
     if photo_file is not None:
-        report["photo_url"] = _upload_file(photo_file, "photos")
+        report["photo_url"] = _upload_file(photo_file, "photos", resource_type="image")
     if voice_file is not None:
-        report["voice_url"] = _upload_file(voice_file, "voice")
+        report["voice_url"] = _upload_file(voice_file, "voice", resource_type="video")
     db.collection("citizen_reports").add(report)
     return True
 
 
-def _upload_file(file, folder):
-    from firebase_admin import storage
-    bucket = storage.bucket()
-    blob = bucket.blob(f"{folder}/{file.name}")
-    blob.upload_from_file(file, content_type=file.type)
-    blob.make_public()
-    return blob.public_url
+@st.cache_resource
+def _configure_cloudinary():
+    import cloudinary
+    cloudinary.config(
+        cloud_name=CLOUDINARY_CLOUD_NAME,
+        api_key=CLOUDINARY_API_KEY,
+        api_secret=CLOUDINARY_API_SECRET,
+        secure=True,
+    )
+    return True
+
+
+def _upload_file(file, folder, resource_type):
+    """Uploads a Streamlit UploadedFile straight to Cloudinary — no local
+    save or byte conversion needed, since Cloudinary's SDK accepts any
+    file-like object with .read()/.name, which is exactly what
+    st.file_uploader() returns.
+
+    resource_type matters: Cloudinary defaults to "image", which fails
+    for audio. Voice notes need resource_type="video" (Cloudinary files
+    audio under its "video" category — there's no separate "audio" type).
+    """
+    import cloudinary.uploader
+    _configure_cloudinary()
+    result = cloudinary.uploader.upload(
+        file,
+        folder=folder,
+        resource_type=resource_type,
+        use_filename=True,
+        unique_filename=True,
+        overwrite=False,
+    )
+    return result["secure_url"]

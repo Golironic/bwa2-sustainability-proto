@@ -10,22 +10,39 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-# Center the mock points around Delhi NCR (CPCB/IMD territory) — change
-# this if your city/region differs.
-CENTER_LAT, CENTER_LON = 28.6139, 77.2090
+# Named POI regions the mock data is spread across. Add/remove entries
+# here to change where demo points show up — everything downstream
+# (map centering, stats) adapts automatically since it reads whatever
+# lat/lon values come out of these generators.
+REGIONS = {
+    "Delhi NCR": (28.6139, 77.2090),
+    "Punjab": (30.9010, 75.8573),       # Ludhiana — Punjab's largest city
+    "Gandhinagar": (23.2156, 72.6369),
+    "Mumbai": (19.0760, 72.8777),
+}
 
 
 def _jitter(base, spread=0.15):
     return base + random.uniform(-spread, spread)
 
 
+def _random_point(spread=0.15):
+    """Picks a random region and returns (region_name, lat, lon) jittered
+    around that region's center, so generated points cluster naturally
+    around real cities instead of scattering uniformly across India."""
+    region, (base_lat, base_lon) = random.choice(list(REGIONS.items()))
+    return region, _jitter(base_lat, spread), _jitter(base_lon, spread)
+
+
 def get_mock_aqi_readings(n=25):
     rows = []
     for i in range(n):
+        region, lat, lon = _random_point()
         rows.append({
             "station_id": f"STN{i:03d}",
-            "lat": _jitter(CENTER_LAT),
-            "lon": _jitter(CENTER_LON),
+            "region": region,
+            "lat": lat,
+            "lon": lon,
             "timestamp": datetime.now() - timedelta(minutes=random.randint(0, 60)),
             "pm25": round(random.uniform(20, 300), 1),
             "pm10": round(random.uniform(30, 400), 1),
@@ -38,9 +55,11 @@ def get_mock_aqi_readings(n=25):
 def get_mock_fire_hotspots(n=10):
     rows = []
     for i in range(n):
+        region, lat, lon = _random_point(0.3)
         rows.append({
-            "lat": _jitter(CENTER_LAT, 0.3),
-            "lon": _jitter(CENTER_LON, 0.3),
+            "region": region,
+            "lat": lat,
+            "lon": lon,
             "timestamp": datetime.now() - timedelta(hours=random.randint(0, 12)),
             "confidence": random.randint(50, 100),
             "brightness": round(random.uniform(300, 400), 1),
@@ -58,10 +77,12 @@ def get_mock_citizen_reports(n=15):
     rows = []
     for i in range(n):
         severity = random.randint(1, 5)
+        region, lat, lon = _random_point(0.2)
         rows.append({
             "id": f"report_{i}",
-            "lat": _jitter(CENTER_LAT, 0.2),
-            "lon": _jitter(CENTER_LON, 0.2),
+            "region": region,
+            "lat": lat,
+            "lon": lon,
             "category": random.choice(categories),
             "text": "Mock citizen report text describing the issue.",
             "language": random.choice(["en", "hi"]),

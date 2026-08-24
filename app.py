@@ -4,6 +4,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
+import folium
+from streamlit_folium import st_folium
+from streamlit_geolocation import streamlit_geolocation
 
 import data_sources as ds
 import theme
@@ -89,41 +92,53 @@ with tab_map:
         show_reports = col3.checkbox("Citizen reports", value=True)
 
         layers = []
+        all_points = []  # (lon, lat) pairs across every visible, non-empty layer — used to auto-fit the view
         if show_aqi and not aqi_df.empty:
-            aqi_plot = aqi_df.copy()
-            aqi_plot["color"] = aqi_plot["aqi_value"].apply(
-                lambda v: theme.hex_to_rgba(theme.get_aqi_category(v)[1], 190)
-            )
-            layers.append(pdk.Layer(
-                "ScatterplotLayer", data=aqi_plot, get_position="[lon, lat]",
-                get_radius=380, get_fill_color="color", stroked=True,
-                get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
-            ))
+            aqi_plot = aqi_df.dropna(subset=["lat", "lon"]).copy()
+            if not aqi_plot.empty:
+                aqi_plot["color"] = aqi_plot["aqi_value"].apply(
+                    lambda v: theme.hex_to_rgba(theme.get_aqi_category(v)[1], 190)
+                )
+                layers.append(pdk.Layer(
+                    "ScatterplotLayer", data=aqi_plot, get_position="[lon, lat]",
+                    get_radius=380, get_fill_color="color", stroked=True,
+                    get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
+                ))
+                all_points.extend(zip(aqi_plot["lon"], aqi_plot["lat"]))
         if show_fire and not fire_df.empty:
-            fire_plot = fire_df.copy()
-            fire_plot["color"] = [theme.hex_to_rgba(theme.EMBER, 210) for _ in range(len(fire_plot))]
-            layers.append(pdk.Layer(
-                "ScatterplotLayer", data=fire_plot, get_position="[lon, lat]",
-                get_radius=340, get_fill_color="color", stroked=True,
-                get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
-            ))
+            fire_plot = fire_df.dropna(subset=["lat", "lon"]).copy()
+            if not fire_plot.empty:
+                fire_plot["color"] = [theme.hex_to_rgba(theme.EMBER, 210) for _ in range(len(fire_plot))]
+                layers.append(pdk.Layer(
+                    "ScatterplotLayer", data=fire_plot, get_position="[lon, lat]",
+                    get_radius=340, get_fill_color="color", stroked=True,
+                    get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
+                ))
+                all_points.extend(zip(fire_plot["lon"], fire_plot["lat"]))
         if show_reports and not reports_df.empty:
-            reports_plot = reports_df.copy()
-            reports_plot["color"] = reports_plot["severity"].fillna(1).apply(
-                lambda s: theme.hex_to_rgba(theme.get_severity_color(s), 210)
-            )
-            layers.append(pdk.Layer(
-                "ScatterplotLayer", data=reports_plot, get_position="[lon, lat]",
-                get_radius=300, get_fill_color="color", stroked=True,
-                get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
-            ))
+            reports_plot = reports_df.dropna(subset=["lat", "lon"]).copy()
+            if not reports_plot.empty:
+                reports_plot["color"] = reports_plot["severity"].fillna(1).apply(
+                    lambda s: theme.hex_to_rgba(theme.get_severity_color(s), 210)
+                )
+                layers.append(pdk.Layer(
+                    "ScatterplotLayer", data=reports_plot, get_position="[lon, lat]",
+                    get_radius=300, get_fill_color="color", stroked=True,
+                    get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
+                ))
+                all_points.extend(zip(reports_plot["lon"], reports_plot["lat"]))
 
-        center_lat = aqi_df["lat"].mean() if not aqi_df.empty else 28.6139
-        center_lon = aqi_df["lon"].mean() if not aqi_df.empty else 77.2090
+        if all_points:
+            # Auto-fit the view to wherever the real data actually is, instead
+            # of a fixed fallback point that only made sense for aqi_df.
+            view_state = pdk.data_utils.compute_view(list(all_points))
+            view_state.zoom = min(view_state.zoom, 12)  # don't over-zoom for a single point/tight cluster
+        else:
+            view_state = pdk.ViewState(latitude=28.6139, longitude=77.2090, zoom=10)
 
         st.pydeck_chart(pdk.Deck(
             map_style="dark",
-            initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=10),
+            initial_view_state=view_state,
             layers=layers,
             tooltip={"text": "AQI/Severity data point"},
         ))
@@ -208,11 +223,66 @@ with tab_report:
     st.markdown('<div class="eyebrow">New Submission</div>', unsafe_allow_html=True)
     st.markdown('<h3 style="margin:4px 0 16px 0;">Report an air quality issue</h3>', unsafe_allow_html=True)
 
+    # Default fallback (Delhi NCR), matching the rest of the app.
+    DEFAULT_LAT, DEFAULT_LON = 28.6139, 77.2090
+    if "report_lat" not in st.session_state:
+        st.session_state.report_lat = DEFAULT_LAT
+        st.session_state.report_lon = DEFAULT_LON
+        st.session_state.loc_version = 0
+
+    def _set_report_location(lat, lon):
+        """Updates the picked location and bumps loc_version — but only on
+        an actual change. loc_version feeds into the number_input keys
+        below so a real pick refreshes their displayed value, while a
+        manual edit in between picks doesn't get silently overwritten
+        (widgets inside st.form don't rerun until submit, so the location
+        picker has to live outside the form and hand off through
+        session_state instead)."""
+        lat, lon = round(lat, 6), round(lon, 6)
+        if (lat, lon) != (st.session_state.report_lat, st.session_state.report_lon):
+            st.session_state.report_lat = lat
+            st.session_state.report_lon = lon
+            st.session_state.loc_version += 1
+            st.rerun()
+
+    with st.container(border=True):
+        st.markdown(theme.panel_heading("Set Location"), unsafe_allow_html=True)
+        loc_col1, loc_col2 = st.columns([1, 2])
+
+        with loc_col1:
+            st.caption("Use your device location:")
+            geo = streamlit_geolocation()
+            if geo and geo.get("latitude") is not None and geo.get("longitude") is not None:
+                _set_report_location(geo["latitude"], geo["longitude"])
+            st.caption(f"Selected: {st.session_state.report_lat:.5f}, {st.session_state.report_lon:.5f}")
+
+        with loc_col2:
+            st.caption("Or click the map to drop a pin:")
+            m = folium.Map(
+                location=[st.session_state.report_lat, st.session_state.report_lon],
+                zoom_start=12,
+                tiles="CartoDB dark_matter",
+            )
+            folium.Marker(
+                [st.session_state.report_lat, st.session_state.report_lon],
+                tooltip="Selected location",
+            ).add_to(m)
+            map_data = st_folium(m, height=280, use_container_width=True, key="report_location_map")
+            if map_data and map_data.get("last_clicked"):
+                _set_report_location(map_data["last_clicked"]["lat"], map_data["last_clicked"]["lng"])
+
     with st.form("citizen_report_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
-        lat = col1.number_input("Latitude", value=28.6139, format="%.6f")
-        lon = col2.number_input("Longitude", value=77.2090, format="%.6f")
-        st.caption("For real device location, add the streamlit-geolocation package and swap these inputs.")
+        # Keyed on loc_version so a geolocation/map pick refreshes these
+        # fields, while a manual edit between picks is left alone.
+        lat = col1.number_input(
+            "Latitude", value=st.session_state.report_lat, format="%.6f",
+            key=f"lat_input_{st.session_state.loc_version}",
+        )
+        lon = col2.number_input(
+            "Longitude", value=st.session_state.report_lon, format="%.6f",
+            key=f"lon_input_{st.session_state.loc_version}",
+        )
 
         category = st.selectbox(
             "Category", ["Burning", "Vehicle Smoke", "Industrial", "Dust", "Construction", "Other"]
@@ -225,7 +295,7 @@ with tab_report:
 
         if submitted:
             report = {
-                "location": {"lat": lat, "lon": lon},
+                "location": {"lat": lat, "lng": lon},
                 "category": category,
                 "text": text,
                 "language": language,
