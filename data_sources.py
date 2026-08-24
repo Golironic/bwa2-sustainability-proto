@@ -4,8 +4,13 @@ makes "swap mock for real" a one-line change: as long as Person 1's
 BigQuery tables and Person 2's Firestore fields match the shared
 schema, nothing in app.py has to change — only USE_MOCK below.
 """
+import os
 import streamlit as st
 import pandas as pd
+from dotenv import load_dotenv
+
+# Load variables from .env file into environment
+load_dotenv()
 
 import mock_data
 
@@ -13,18 +18,18 @@ import mock_data
 USE_MOCK = False
 
 # Fill these in when USE_MOCK = False
-FIREBASE_KEY_PATH = "firebase-key.json"   # Person 1 shares this file with you
-BQ_PROJECT_ID = "carc-f5b14"
-BQ_DATASET = "air_quality"
+FIREBASE_KEY_PATH = os.getenv("FIREBASE_KEY_PATH", "firebase-key.json")
+BQ_PROJECT_ID = os.getenv("BQ_PROJECT_ID", "carc-f5b14")
+BQ_DATASET = os.getenv("BQ_DATASET", "air_quality")
 
 # Cloudinary handles photo/voice uploads (Firestore/BigQuery stay on Google —
 # Cloudinary only replaces Firebase Storage, not the databases). Get these
 # three values from your Cloudinary dashboard (cloudinary.com/console).
 # Keep CLOUDINARY_API_SECRET out of git the same way you keep
 # firebase-key.json out — see the .gitignore note in the README.
-CLOUDINARY_CLOUD_NAME = "eycdofm4"
-CLOUDINARY_API_KEY = "631999741599272"
-CLOUDINARY_API_SECRET = "vY49GdAFIx1S52RUBg1okGSjw9k"
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
 
 
 @st.cache_resource
