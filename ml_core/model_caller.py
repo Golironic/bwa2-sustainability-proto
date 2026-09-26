@@ -1,9 +1,30 @@
 import json
 import pandas as pd
 import xgboost as xgb
+from pathlib import Path
 
-MODEL_PATH = "aqi_xgboost_model.json"
-CATEGORIES_PATH = "region_categories.json"
+# Absolute path relative to model_caller.py
+ML_DIR = Path(__file__).resolve().parent
+MODEL_PATH = ML_DIR / "aqi_xgboost_model.json"
+CATEGORIES_PATH = ML_DIR / "region_categories.json"
+
+class AQIPredictor:
+    def __init__(
+        self, 
+        model_path=ML_DIR / "aqi_xgboost_model.json", 
+        categories_path=ML_DIR / "region_categories.json"
+    ):
+        # Convert Path objects to strings for XGBoost/open()
+        self.model_path = str(model_path)
+        self.categories_path = str(categories_path)
+
+        # Load Model
+        self.model = xgb.XGBRegressor()
+        self.model.load_model(str(self.model_path))
+
+        # Load Regional Metadata
+        with open(self.categories_path, "r") as f:
+            self.region_categories = json.load(f)
 
 def load_inference_pipeline():
     """Load the pre-trained model and categorical metadata into memory."""
