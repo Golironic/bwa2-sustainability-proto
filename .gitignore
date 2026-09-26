@@ -222,9 +222,8 @@ __pycache__/
 *.pyc
 .DS_Store
 serviceAccountKey.json
-aqi_xgboost_model.json
 vertex-ai.py
 aqi_weather_historical.csv
 local-mock-csv-creator.py
-pandas-model.py
 bwa2-sustainability-proto myworkspace.code-workspace
+ml_core/aqi_xgboost_model.json
