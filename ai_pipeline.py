@@ -1,6 +1,7 @@
 import os
 import io
-from urllib import response
+# from turtle import pandas as pd
+import pandas as pd
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -10,11 +11,15 @@ from firebase_admin import credentials, firestore
 import json
 from typing import Optional, Dict, Any, Union
 import io
-from google.cloud import aiplatform
 from dotenv import load_dotenv
 import requests
+from pathlib import Path
+from ml_core.model_caller import AQICaller
 
 load_dotenv()  # Load environment variables from .env file
+
+# Initialize once when the backend starts up (keeps inference sub-10ms)
+_caller = AQICaller()
 
 # 1. Initialize Gemini Client (Make sure GEMINI_API_KEY is in your environment variables)
 client = genai.Client(api_key=os.environ.get("GEMINI_API_Key"))
@@ -137,36 +142,6 @@ def download_image(photo_url: str) -> Optional[bytes]:
         print(f"Error downloading image from {photo_url}: {e}")
         return None
 
-# # --- Example Usage for Testing ---
-# if __name__ == "__main__":
-#     # Test with a dummy image and text from firestore and cloudinary
-#     collection_name = "citizen_reports"  # Firestore collection for citizen reports
-#     sample_doc_id = "2FfEgs63sJd0mY7L9mKg" # Firestore document ID to test with
-#     doc_ref = db.collection(collection_name).document(sample_doc_id)
-#     doc = doc_ref.get()
-
-#     data = doc.to_dict()
-#     if data is None:
-#         print(f"Error: Document {sample_doc_id} has no data")
-#         exit(1)
-
-#     sample_text = data.get("text", "")
-
-#     sample_photo_url_cloudinary = data.get("photo_url")
-#     if not sample_photo_url_cloudinary:
-#         print(f"Error: Document {sample_doc_id} has no photo_url")
-#         exit(1)
-        
-#     sample_image = download_image(sample_photo_url_cloudinary)
-    
-#     if sample_image is not None:
-#         result_json = analyze_citizen_report(sample_image, sample_text)
-#         print (f"Gemini Analysis Result: {result_json}")
-#         if result_json:
-#             save_to_firestore(collection_name, sample_doc_id, result_json.model_dump())
-#     else:
-#         print(f"Please place a sample image named '{sample_image}' in your directory to test!")
-
 def process_and_save_report(doc_id: str, collection_name: str) -> Dict[str, Any]:
     report_data = get_report_from_firestore(collection_name, doc_id)
     if not report_data:
@@ -187,5 +162,29 @@ def process_and_save_report(doc_id: str, collection_name: str) -> Dict[str, Any]
         "document_id": updated_id,
         "data": {"ai_analysis": analysis_result.model_dump()}
     }
+
+def predict_next_hour_aqi(recent_history_df: pd.DataFrame) -> float:
+    """
+    Public entry point for backend integration.
+    
+    Parameters:
+        recent_history_df (pd.DataFrame): DataFrame containing at least the past 25 hours
+        of hourly records for a region.
+        Required columns:
+            - 'timestamp'
+            - 'region'
+            - 'aqi_value'
+            - 'temperature_aqi'
+            - 'humidity_aqi'
+            - 'wind_speed_aqi'
+            - 'wind_direction_aqi'
+    
+    Returns:
+        float: Predicted next-hour AQI value (rounded to 2 decimal places).
+    """
+    if recent_history_df is None or len(recent_history_df) < 25:
+        raise ValueError("Must provide at least 25 hours of historical data to compute 24h lag features.")
+    
+    return _caller.predict(recent_history_df)
 
 
