@@ -1,0 +1,17 @@
+cloudinary==1.46.2
+firebase_admin==7.5.0
+folium==0.20.0
+numpy==2.5.3
+pandas==3.0.6
+Pillow==12.3.0
+plotly==7.1.0
+protobuf==7.36.2
+pydantic==2.13.5
+pydeck==0.9.3
+python-dotenv==1.2.3
+Requests==2.34.2
+scikit_learn==1.9.1
+streamlit==1.64.0
+streamlit_folium==0.27.4
+streamlit_geolocation==0.0.10
+xgboost==3.4.1
