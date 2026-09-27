@@ -1,32 +1,28 @@
 """
 Pulls active fire detections (NASA FIRMS) for 4 target regions and loads
-them into BigQuery. Used as a proxy for agricultural/stubble burning and
-other localized fire-driven pollution events.
+them into BigQuery (table: fire_hotspots). Used as a proxy for agricultural
+/ stubble burning.
 
-NOTE ON SCHEMA: table name and field names (location, timestamp,
-confidence, brightness, source) are aligned to the team's shared data
-contract, which specced Google Earth Engine as the fire data source into
-a `fire_hotspots` table. We're using NASA FIRMS directly instead (free,
-same underlying VIIRS/MODIS satellite data, no Earth Engine account
-needed) - flagged to the team, not a silent swap. Extra fields (region,
-frp, satellite, daynight, fetched_at) are kept beyond the contract for
-richer hotspot scoring but don't break anything Person 3's dashboard
-expects.
+CHANGES IN THIS VERSION (vs. the original)
+  1. No more duplicate rows. FIRMS returns the last DAY_RANGE days on every
+     call, so re-running re-inserted the same detections. We now skip
+     detections already in BigQuery (matched on lat, lng, timestamp).
+  2. The FIRMS key can no longer leak into logs. requests puts the URL
+     (which contains the key) in exception messages; we catch those and
+     re-raise a message without the URL.
+  3. load_dotenv() is called, so FIRMS_MAP_KEY in .env is picked up.
 
-Regions: Delhi-NCR, Punjab, Gandhinagar, Mumbai
+NOTE ON SCHEMA: table/field names follow the team's shared contract
+(location, timestamp, confidence, brightness, source). We use NASA FIRMS
+instead of Earth Engine (same VIIRS/MODIS data, no EE account needed).
+Extra fields (region, frp, satellite, daynight, fetched_at) are additions.
 
 Run:
     python fetch_firms.py
 
 Requires:
-    pip install google-cloud-bigquery requests
-    A free FIRMS MAP_KEY - register at:
-    https://firms.modaps.eosdis.nasa.gov/api/map_key/
-    (takes seconds, just needs an email - keep this key secret, don't
-    hardcode/commit it, same as the OpenAQ key)
-
-    A GCP project with BigQuery API enabled, and
-    GOOGLE_APPLICATION_CREDENTIALS env var pointing to firebase-key.json
+    pip install google-cloud-bigquery requests python-dotenv
+    .env with FIRMS_MAP_KEY=...
 """
 
 import os
@@ -35,24 +31,23 @@ import io
 import requests
 from datetime import datetime, timezone
 from google.cloud import bigquery
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ---- CONFIG ----
 os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", "firebase-key.json")
 
-PROJECT_ID = "carc-f5b14"
+PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "carc-f5b14")
 DATASET_ID = "air_quality"
-FIRMS_TABLE_ID = "fire_hotspots"  # matches shared team schema
+FIRMS_TABLE_ID = "fire_hotspots"
 
-# Get your own free key: https://firms.modaps.eosdis.nasa.gov/api/map_key/
-FIRMS_MAP_KEY = os.environ.get("FIRMS_MAP_KEY", "")
+FIRMS_MAP_KEY = os.environ.get("FIRMS_MAP_KEY")
 
-# VIIRS NOAA-20 NRT: ~375m resolution, near-real-time, good default.
-# Alternatives: VIIRS_SNPP_NRT, MODIS_NRT (coarser, 1km)
 FIRMS_SOURCE = "VIIRS_NOAA20_NRT"
-DAY_RANGE = 5  # 1 = most recent day only (FIRMS allows up to 10)
+DAY_RANGE = 5  # FIRMS allows 1-10
 
-# Bounding boxes as (west, south, east, north) - wider than the AQI/weather
-# point+radius since FIRMS area queries need a box, not a center point.
+# (west, south, east, north)
 REGIONS = {
     "Delhi-NCR":   {"bbox": (76.5, 28.0, 77.9, 29.2)},
     "Punjab":      {"bbox": (73.9, 29.5, 76.9, 32.5)},
@@ -64,6 +59,7 @@ REGIONS = {
 client = bigquery.Client(project=PROJECT_ID)
 dataset_ref = f"{PROJECT_ID}.{DATASET_ID}"
 
+
 def ensure_table(table_id, schema):
     table_ref = f"{dataset_ref}.{table_id}"
     try:
@@ -74,39 +70,79 @@ def ensure_table(table_id, schema):
         print(f"Created table {table_ref}")
     return table_ref
 
+
 FIRMS_SCHEMA = [
-    # --- fields from the shared team schema (fire_hotspots) ---
     bigquery.SchemaField("location", "RECORD", fields=[
         bigquery.SchemaField("lat", "FLOAT"),
         bigquery.SchemaField("lng", "FLOAT"),
     ]),
-    bigquery.SchemaField("timestamp", "TIMESTAMP"),   # actual satellite detection time (acq_date + acq_time)
-    bigquery.SchemaField("confidence", "STRING"),      # low/nominal/high (VIIRS) or 0-100 (MODIS)
-    bigquery.SchemaField("brightness", "FLOAT"),       # fire radiative brightness (K)
-    bigquery.SchemaField("source", "STRING"),          # e.g. "VIIRS_NOAA20_NRT" (via NASA FIRMS, not Earth Engine)
-    # --- extra fields kept for richer scoring/debugging, not required by the contract ---
+    bigquery.SchemaField("timestamp", "TIMESTAMP"),
+    bigquery.SchemaField("confidence", "STRING"),
+    bigquery.SchemaField("brightness", "FLOAT"),
+    bigquery.SchemaField("source", "STRING"),
     bigquery.SchemaField("region", "STRING"),
-    bigquery.SchemaField("frp", "FLOAT"),              # fire radiative power (MW) - proxy for intensity
+    bigquery.SchemaField("frp", "FLOAT"),
     bigquery.SchemaField("satellite", "STRING"),
     bigquery.SchemaField("daynight", "STRING"),
-    bigquery.SchemaField("fetched_at", "TIMESTAMP"),   # when our script pulled this row
+    bigquery.SchemaField("fetched_at", "TIMESTAMP"),
 ]
 
-# ---- FETCH FUNCTION ----
-def fetch_firms(region_name, bbox, day_range=DAY_RANGE):
-    """Pull active fire detections for a bounding box from NASA FIRMS."""
+
+# ---- HELPERS ----
+def parse_ts(ts):
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+
+
+def fire_key(lat, lng, ts):
+    """Identity of a detection. Rounded so float round-trips through BigQuery match."""
+    return (round(lat, 5), round(lng, 5), parse_ts(ts))
+
+
+def existing_fire_keys(hours=None):
+    """Detections already loaded within the lookback window (default: FIRMS window)."""
+    hours = hours or (DAY_RANGE + 1) * 24
+    query = f"""
+        SELECT location.lat AS lat, location.lng AS lng, timestamp
+        FROM `{dataset_ref}.{FIRMS_TABLE_ID}`
+        WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {hours} HOUR)
+    """
+    try:
+        return {fire_key(r["lat"], r["lng"], r["timestamp"])
+                for r in client.query(query).result()
+                if r["lat"] is not None and r["lng"] is not None}
+    except Exception as e:
+        print(f"  Warning: could not read existing fire rows ({e}); skipping dedupe")
+        return set()
+
+
+# ---- FETCH ----
+def fetch_firms(region_name, bbox, day_range=DAY_RANGE, start_date=None, source=None):
+    """Pull active fire detections for a bounding box from NASA FIRMS.
+
+    start_date ("YYYY-MM-DD") makes FIRMS return day_range days starting at
+    that date (used by backfill_history.py). source overrides FIRMS_SOURCE."""
+    source = source or FIRMS_SOURCE
     if not FIRMS_MAP_KEY:
-        raise RuntimeError("FIRMS_MAP_KEY not set - export it or set it in the script")
+        raise RuntimeError("FIRMS_MAP_KEY not set - add it to .env")
 
     west, south, east, north = bbox
     area = f"{west},{south},{east},{north}"
-    url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{FIRMS_MAP_KEY}/{FIRMS_SOURCE}/{area}/{day_range}"
+    url = (f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/"
+           f"{FIRMS_MAP_KEY}/{source}/{area}/{day_range}")
+    if start_date:
+        url += f"/{start_date}"
 
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
+    # Never let the URL (it contains the key) reach an error message.
+    try:
+        resp = requests.get(url, timeout=30)
+    except requests.RequestException as e:
+        raise RuntimeError(f"FIRMS request failed for {region_name}: {type(e).__name__}") from None
+    if resp.status_code != 200:
+        detail = resp.text.strip()[:120].replace(FIRMS_MAP_KEY, "***")
+        raise RuntimeError(f"FIRMS HTTP {resp.status_code} for {region_name}: {detail}")
 
-    # FIRMS returns an error message as plain text (not CSV) if the key or
-    # params are bad - guard against silently parsing that as "0 rows".
     text = resp.text.strip()
     if text.lower().startswith("invalid") or "error" in text[:200].lower():
         raise RuntimeError(f"FIRMS API error for {region_name}: {text[:200]}")
@@ -118,22 +154,17 @@ def fetch_firms(region_name, bbox, day_range=DAY_RANGE):
     for r in reader:
         lat = float(r["latitude"]) if r.get("latitude") else None
         lon = float(r["longitude"]) if r.get("longitude") else None
+        if lat is None or lon is None:
+            continue
         brightness = float(r["bright_ti4"]) if r.get("bright_ti4") else (
             float(r["brightness"]) if r.get("brightness") else None
         )
 
-        # Build the actual satellite detection timestamp from acq_date + acq_time
-        # (FIRMS gives these as separate fields, e.g. "2026-08-22" + "0512" = 05:12 UTC)
         acq_date = r.get("acq_date", "")
         acq_time_raw = r.get("acq_time", "")
-        detection_ts = None
         if acq_date and acq_time_raw:
-            try:
-                hh = acq_time_raw.zfill(4)[:2]
-                mm = acq_time_raw.zfill(4)[2:]
-                detection_ts = f"{acq_date}T{hh}:{mm}:00Z"
-            except Exception:
-                detection_ts = fetched_at
+            t = acq_time_raw.zfill(4)
+            detection_ts = f"{acq_date}T{t[:2]}:{t[2:]}:00Z"
         else:
             detection_ts = fetched_at
 
@@ -142,7 +173,7 @@ def fetch_firms(region_name, bbox, day_range=DAY_RANGE):
             "timestamp": detection_ts,
             "confidence": r.get("confidence", ""),
             "brightness": brightness,
-            "source": FIRMS_SOURCE,
+            "source": source,
             "region": region_name,
             "frp": float(r["frp"]) if r.get("frp") else None,
             "satellite": r.get("satellite", ""),
@@ -151,34 +182,47 @@ def fetch_firms(region_name, bbox, day_range=DAY_RANGE):
         })
     return rows
 
+
 # ---- MAIN ----
 def main():
     firms_table = ensure_table(FIRMS_TABLE_ID, FIRMS_SCHEMA)
+    seen = existing_fire_keys()
+    print(f"{len(seen)} detections already in BigQuery (last {DAY_RANGE + 1} days)")
 
-    all_rows = []
+    new_rows = []
     for region_name, info in REGIONS.items():
         print(f"Fetching {region_name}...")
         try:
             rows = fetch_firms(region_name, info["bbox"])
-            print(f"  {len(rows)} fire detections")
-            all_rows.extend(rows)
         except Exception as e:
             print(f"  FIRMS fetch failed for {region_name}: {e}")
+            continue
+
+        fresh = 0
+        for row in rows:
+            key = fire_key(row["location"]["lat"], row["location"]["lng"], row["timestamp"])
+            if key in seen:
+                continue
+            seen.add(key)
+            new_rows.append(row)
+            fresh += 1
+        print(f"  {len(rows)} detections from FIRMS, {fresh} new")
+
+    if not new_rows:
+        print("No new fire rows to insert.")
+        return
 
     job_config = bigquery.LoadJobConfig(
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
     )
-
-    if all_rows:
-        job = client.load_table_from_json(all_rows, firms_table, job_config=job_config)
-        job.result()
-        if job.errors:
-            print("FIRMS insert errors:", job.errors)
-        else:
-            print(f"Inserted {len(all_rows)} fire rows into {firms_table}")
+    job = client.load_table_from_json(new_rows, firms_table, job_config=job_config)
+    job.result()
+    if job.errors:
+        print("FIRMS insert errors:", job.errors)
     else:
-        print("No fire rows to insert.")
+        print(f"Inserted {len(new_rows)} fire rows into {firms_table}")
+
 
 if __name__ == "__main__":
     main()

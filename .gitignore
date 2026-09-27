@@ -233,3 +233,10 @@ aqi_weather_historical.csv
 local-mock-csv-creator.py
 bwa2-sustainability-proto myworkspace.code-workspace
 ml_core/aqi_xgboost_model.json
+firebase-key.json
+.env
+__pycache__/
+*.pyc
+.DS_Store
+citize_report.html
+venv/
