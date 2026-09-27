@@ -3,3 +3,5 @@ firebase-key.json
 __pycache__/
 *.pyc
 .DS_Store
+citize_report.html
+venv/
