@@ -59,6 +59,10 @@ def add_time_series_features(df):
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df = df.sort_values(by=['region', 'timestamp']).reset_index(drop=True)
 
+    # 0. Current-hour AQI. The target is the NEXT hour, so the model must see
+    #    the latest reading (previously it only saw t-1 and older).
+    df['aqi_lag_0h'] = df['aqi_value']
+
     # 1. Simple Lags
     df['aqi_lag_1h'] = df.groupby('region')['aqi_value'].shift(1)
     df['aqi_lag_2h'] = df.groupby('region')['aqi_value'].shift(2)
@@ -89,37 +93,41 @@ def add_time_series_features(df):
 
 try:
     print("Engineering temporal, lag, and rolling features...")
-    df = add_time_series_features(df);
-# 2. Feature Engineering (Prepare temporal features locally)
+    df = add_time_series_features(df)
+
+    # 1. Create the future target: shift AQI backward by 1 row per region
+    df['target_aqi_next_hour'] = df.groupby('region')['aqi_value'].shift(-1)
+
+    # 2. Shifting creates a NaN in the last row of each region (no "next hour"). Drop these
+    #    BEFORE building X, so X and y share the same rows and the same index.
+    df = df.dropna(subset=['target_aqi_next_hour']).reset_index(drop=True)
+
+    # 3. Chronological 80/20 split PER REGION. df is sorted by (region, timestamp), so a
+    #    global iloc split would hold out whole regions instead of the most recent time.
+    #    Done while 'region' is still a plain string column.
+    rank_in_region = df.groupby('region').cumcount()
+    region_size = df.groupby('region')['region'].transform('size')
+    is_val = rank_in_region >= (region_size * 0.8)
+
+    # Temporal + categorical features
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df['hour'] = df['timestamp'].dt.hour
     df['dayofweek'] = df['timestamp'].dt.dayofweek
     df['month'] = df['timestamp'].dt.month
     df['region'] = df['region'].astype('category')
 
-    # 1. Create the future target: shift AQI backward by 1 row per region
-    df['target_aqi_next_hour'] = df.groupby('region')['aqi_value'].shift(-1)
-
-    # 2. Shifting creates a NaN in the very last row of each region (since there is no "next hour" available). Drop these.
-    df = df.dropna(subset=['target_aqi_next_hour']).reset_index(drop=True)
-
     # Features (X) vs Target (y)
     X = df[[
         'hour', 'dayofweek', 'month', 'region',
         'temperature_aqi', 'humidity_aqi', 'wind_speed_aqi', 'wind_direction_aqi',
-        # --- New Engineered Features ---
-        'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
+        'aqi_lag_0h', 'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
         'temp_lag_1h', 'wind_lag_1h',
         'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h'
     ]]
-
-    # 3. Set y to the new future target
     y = df['target_aqi_next_hour']
 
-    # 80/20 Chronological split
-    split_idx = int(len(df) * 0.8)
-    X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+    X_train, X_val = X[~is_val], X[is_val]
+    y_train, y_val = y[~is_val], y[is_val]
 
     print(f"Dataset split: {len(X_train)} training rows | {len(X_val)} validation rows.")
 
@@ -142,7 +150,7 @@ try:
     model.fit(
         X_train, y_train,
         eval_set=[(X_val, y_val)],
-        verbose=1000  # Logs training progress every 100 trees
+        verbose=100  # Logs training progress every 100 trees
     )
 
     print(f"\n✅ Training complete! Best tree iteration: {model.best_iteration}")

@@ -12,9 +12,9 @@ model.load_model(MODEL_PATH)
 with open(CATEGORIES_PATH, "r") as f:
     region_categories = json.load(f)
 
-# 2. Define test scenarios matching the full 18-feature schema
+# 2. Define test scenarios matching the full 19-feature schema
 # Columns: ['hour', 'dayofweek', 'month', 'region', 'temperature_aqi', 'humidity_aqi', 
-#          'wind_speed_aqi', 'wind_direction_aqi', 'aqi_lag_1h', 'aqi_lag_2h', 
+#          'wind_speed_aqi', 'wind_direction_aqi', 'aqi_lag_0h', 'aqi_lag_1h', 'aqi_lag_2h', 
 #          'aqi_lag_3h', 'aqi_lag_24h', 'temp_lag_1h', 'wind_lag_1h', 
 #          'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h']
 
@@ -23,7 +23,7 @@ test_cases = pd.DataFrame([
     {
         'hour': 20, 'dayofweek': 0, 'month': 11, 'region': 'Delhi',
         'temperature_aqi': 18.0, 'humidity_aqi': 75.0, 'wind_speed_aqi': 3.5, 'wind_direction_aqi': 290.0,
-        'aqi_lag_1h': 310.0, 'aqi_lag_2h': 300.0, 'aqi_lag_3h': 290.0, 'aqi_lag_24h': 280.0,
+        'aqi_lag_0h': 315.0, 'aqi_lag_1h': 310.0, 'aqi_lag_2h': 300.0, 'aqi_lag_3h': 290.0, 'aqi_lag_24h': 280.0,
         'temp_lag_1h': 19.5, 'wind_lag_1h': 4.0,
         'aqi_roll_mean_3h': 300.0, 'aqi_roll_mean_6h': 285.0, 'aqi_roll_mean_24h': 260.0, 'aqi_roll_std_24h': 25.0
     },
@@ -32,7 +32,7 @@ test_cases = pd.DataFrame([
     {
         'hour': 14, 'dayofweek': 2, 'month': 5, 'region': 'Mumbai',
         'temperature_aqi': 33.0, 'humidity_aqi': 68.0, 'wind_speed_aqi': 14.5, 'wind_direction_aqi': 240.0,
-        'aqi_lag_1h': 105.0, 'aqi_lag_2h': 110.0, 'aqi_lag_3h': 115.0, 'aqi_lag_24h': 120.0,
+        'aqi_lag_0h': 104.0, 'aqi_lag_1h': 105.0, 'aqi_lag_2h': 110.0, 'aqi_lag_3h': 115.0, 'aqi_lag_24h': 120.0,
         'temp_lag_1h': 32.5, 'wind_lag_1h': 13.0,
         'aqi_roll_mean_3h': 110.0, 'aqi_roll_mean_6h': 112.0, 'aqi_roll_mean_24h': 118.0, 'aqi_roll_std_24h': 8.5
     },
@@ -41,7 +41,7 @@ test_cases = pd.DataFrame([
     {
         'hour': 11, 'dayofweek': 4, 'month': 3, 'region': 'Gandhinagar',
         'temperature_aqi': 28.5, 'humidity_aqi': 45.0, 'wind_speed_aqi': 8.0, 'wind_direction_aqi': 180.0,
-        'aqi_lag_1h': 88.0, 'aqi_lag_2h': 85.0, 'aqi_lag_3h': 82.0, 'aqi_lag_24h': 95.0,
+        'aqi_lag_0h': 87.0, 'aqi_lag_1h': 88.0, 'aqi_lag_2h': 85.0, 'aqi_lag_3h': 82.0, 'aqi_lag_24h': 95.0,
         'temp_lag_1h': 27.0, 'wind_lag_1h': 7.5,
         'aqi_roll_mean_3h': 85.0, 'aqi_roll_mean_6h': 87.0, 'aqi_roll_mean_24h': 92.0, 'aqi_roll_std_24h': 5.2
     }

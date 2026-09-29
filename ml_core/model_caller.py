@@ -44,11 +44,11 @@ class AQICaller:
         with open(self.categories_path, "r") as f:
             self.region_categories = json.load(f)
 
-        # 3. Exact 18 features in training order
+        # 3. Exact 19 features in training order
         self.feature_cols = [
             'hour', 'dayofweek', 'month', 'region',
             'temperature_aqi', 'humidity_aqi', 'wind_speed_aqi', 'wind_direction_aqi',
-            'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
+            'aqi_lag_0h', 'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
             'temp_lag_1h', 'wind_lag_1h',
             'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h'
         ]
@@ -104,7 +104,7 @@ class AQICaller:
 
     def predict(self, recent_history_df: pd.DataFrame) -> float:
         """
-        Takes raw historical data for a region, constructs the 18 lag/rolling features,
+        Takes raw historical data for a region, constructs the 19 lag/rolling features,
         and returns the next-hour AQI forecast.
 
         Parameters:
@@ -137,7 +137,10 @@ class AQICaller:
         df['region'] = df['region'].apply(self.sanitize_region)
         df['region'] = pd.Categorical(df['region'], categories=self.region_categories)
 
-        # --- 18 Feature Engineering ---
+        # --- 19 Feature Engineering ---
+        # Current-hour AQI (the newest observation; the target is the NEXT hour)
+        df['aqi_lag_0h'] = df['aqi_value']
+
         # AQI Lags
         df['aqi_lag_1h'] = df['aqi_value'].shift(1)
         df['aqi_lag_2h'] = df['aqi_value'].shift(2)
@@ -212,4 +215,3 @@ class AQICaller:
 #     # 3. Predict immediately
 #     predicted_val = predict_aqi(model, categories, new_sample)
 #     print(f"🔥 Predicted AQI: {predicted_val:.2f}")
-

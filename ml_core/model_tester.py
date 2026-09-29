@@ -56,10 +56,13 @@ else:
     df = pd.read_csv(CSV_PATH)
 
 
-# --- 3. Reconstruct 18 Features (Matching Training Schema) ---
+# --- 3. Reconstruct 19 Features (Matching Training Schema) ---
 def add_time_series_features(data):
     data['timestamp'] = pd.to_datetime(data['timestamp'])
     data = data.sort_values(by=['region', 'timestamp']).reset_index(drop=True)
+
+    # Current-hour AQI
+    data['aqi_lag_0h'] = data['aqi_value']
 
     # AQI Lags
     data['aqi_lag_1h'] = data.groupby('region')['aqi_value'].shift(1)
@@ -90,6 +93,13 @@ def add_time_series_features(data):
 print("🛠️ Processing lag features and preparing validation split...")
 df_featured = add_time_series_features(df)
 
+# Same target and per-region split as model_trainer.py (must stay identical)
+df_featured['target_aqi_next_hour'] = df_featured.groupby('region')['aqi_value'].shift(-1)
+df_featured = df_featured.dropna(subset=['target_aqi_next_hour']).reset_index(drop=True)
+rank_in_region = df_featured.groupby('region').cumcount()
+region_size = df_featured.groupby('region')['region'].transform('size')
+is_val = rank_in_region >= (region_size * 0.8)
+
 # Temporal & Categorical Features
 df_featured['hour'] = df_featured['timestamp'].dt.hour
 df_featured['dayofweek'] = df_featured['timestamp'].dt.dayofweek
@@ -99,19 +109,18 @@ df_featured['region'] = pd.Categorical(df_featured['region'], categories=region_
 feature_cols = [
     'hour', 'dayofweek', 'month', 'region',
     'temperature_aqi', 'humidity_aqi', 'wind_speed_aqi', 'wind_direction_aqi',
-    'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
+    'aqi_lag_0h', 'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
     'temp_lag_1h', 'wind_lag_1h',
     'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h'
 ]
 
 X = df_featured[feature_cols]
-y = df_featured['aqi_value']
+y = df_featured['target_aqi_next_hour']
 
-# Re-create identical chronological validation slice (last 20%)
-split_idx = int(len(df_featured) * 0.8)
-X_val = X.iloc[split_idx:]
-y_val = y.iloc[split_idx:]
-val_df = df_featured.iloc[split_idx:]
+# Re-create identical per-region chronological validation slice (last 20% of each region)
+X_val = X[is_val]
+y_val = y[is_val]
+val_df = df_featured[is_val]
 
 print(f"🔬 Evaluating on {len(X_val)} validation rows...")
 
@@ -138,15 +147,15 @@ print("=" * 50)
 # --- 5. Regional Accuracy Breakdown ---
 val_df_copy = val_df.copy()
 val_df_copy['predicted_aqi'] = y_pred
-val_df_copy['error'] = np.abs(val_df_copy['aqi_value'] - val_df_copy['predicted_aqi'])
+val_df_copy['error'] = np.abs(val_df_copy['target_aqi_next_hour'] - val_df_copy['predicted_aqi'])
 
 regional_metrics = []
 for region_name, group in val_df_copy.groupby('region', observed=False):
     if len(group) == 0:
         continue
-    r_mae = mean_absolute_error(group['aqi_value'], group['predicted_aqi'])
-    r_rmse = np.sqrt(mean_squared_error(group['aqi_value'], group['predicted_aqi']))
-    r_r2 = r2_score(group['aqi_value'], group['predicted_aqi'])
+    r_mae = mean_absolute_error(group['target_aqi_next_hour'], group['predicted_aqi'])
+    r_rmse = np.sqrt(mean_squared_error(group['target_aqi_next_hour'], group['predicted_aqi']))
+    r_r2 = r2_score(group['target_aqi_next_hour'], group['predicted_aqi'])
     regional_metrics.append({
         'Region': region_name,
         'Samples': len(group),
@@ -173,8 +182,8 @@ print(importance_df.head(10).to_string(index=False))
 
 
 # --- 7. Random Prediction Comparison Sample ---
-sample_comparison = val_df_copy[['timestamp', 'region', 'aqi_value', 'predicted_aqi', 'error']].sample(10, random_state=42)
-sample_comparison = sample_comparison.rename(columns={'aqi_value': 'actual_aqi'}).round(2)
+sample_comparison = val_df_copy[['timestamp', 'region', 'target_aqi_next_hour', 'predicted_aqi', 'error']].sample(10, random_state=42)
+sample_comparison = sample_comparison.rename(columns={'target_aqi_next_hour': 'actual_aqi'}).round(2)
 
 print("\n" + "=" * 50)
 print("👀 RANDOM 10 PREDICTION COMPARISON SAMPLES")
