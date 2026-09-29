@@ -12,11 +12,10 @@ from pathlib import Path
 load_dotenv()
 
 # --- 1. Configurations & Model Loading ---
-ML_DIR = Path(__file__).resolve().parent
-
-MODEL_PATH = ML_DIR / "aqi_xgboost_model.json"
-CATEGORIES_PATH = ML_DIR / "region_categories.json"
-CSV_PATH = ML_DIR / "aqi_weather_historical.csv"
+try:
+    from ml_core.config import ML_DIR, MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS
+except ImportError:  # run directly from inside ml_core/
+    from config import ML_DIR, MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS
 USE_BIGQUERY = False  # Set to True if pulling directly from BigQuery
 
 if not os.path.exists(MODEL_PATH) or not os.path.exists(CATEGORIES_PATH):
@@ -106,13 +105,7 @@ df_featured['dayofweek'] = df_featured['timestamp'].dt.dayofweek
 df_featured['month'] = df_featured['timestamp'].dt.month
 df_featured['region'] = pd.Categorical(df_featured['region'], categories=region_categories)
 
-feature_cols = [
-    'hour', 'dayofweek', 'month', 'region',
-    'temperature_aqi', 'humidity_aqi', 'wind_speed_aqi', 'wind_direction_aqi',
-    'aqi_lag_0h', 'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
-    'temp_lag_1h', 'wind_lag_1h',
-    'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h'
-]
+feature_cols = FEATURE_COLS
 
 X = df_featured[feature_cols]
 y = df_featured['target_aqi_next_hour']

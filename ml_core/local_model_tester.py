@@ -3,11 +3,14 @@ import pandas as pd
 import xgboost as xgb
 from pathlib import Path
 
-from ml_core.model_trainer import CATEGORIES_PATH, MODEL_PATH
+try:
+    from ml_core.config import CATEGORIES_PATH, MODEL_PATH, FEATURE_COLS
+except ImportError:  # run directly from inside ml_core/
+    from config import CATEGORIES_PATH, MODEL_PATH, FEATURE_COLS
 
 # 1. Load trained model & regional metadata
 model = xgb.XGBRegressor()
-model.load_model(MODEL_PATH)
+model.load_model(str(MODEL_PATH))
 
 with open(CATEGORIES_PATH, "r") as f:
     region_categories = json.load(f)
@@ -46,6 +49,8 @@ test_cases = pd.DataFrame([
         'aqi_roll_mean_3h': 85.0, 'aqi_roll_mean_6h': 87.0, 'aqi_roll_mean_24h': 92.0, 'aqi_roll_std_24h': 5.2
     }
 ])
+
+test_cases = test_cases[FEATURE_COLS]
 
 # 3. Format region as categorical matching trained categories
 test_cases['region'] = pd.Categorical(test_cases['region'], categories=region_categories)

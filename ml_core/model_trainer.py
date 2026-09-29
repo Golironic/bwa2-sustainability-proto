@@ -8,11 +8,11 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 
 load_dotenv()
-# --- Setup Absolute Paths relative to THIS script ---
-ML_DIR = Path(__file__).resolve().parent
-MODEL_PATH = ML_DIR / "aqi_xgboost_model.json"
-CATEGORIES_PATH = ML_DIR / "region_categories.json"
-CSV_PATH = ML_DIR / "aqi_weather_historical.csv"
+# --- Paths and feature list come from config.py ---
+try:
+    from ml_core.config import ML_DIR, MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS
+except ImportError:  # run directly from inside ml_core/
+    from config import ML_DIR, MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS
 
 USE_BIGQUERY = False;
 
@@ -117,13 +117,7 @@ try:
     df['region'] = df['region'].astype('category')
 
     # Features (X) vs Target (y)
-    X = df[[
-        'hour', 'dayofweek', 'month', 'region',
-        'temperature_aqi', 'humidity_aqi', 'wind_speed_aqi', 'wind_direction_aqi',
-        'aqi_lag_0h', 'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
-        'temp_lag_1h', 'wind_lag_1h',
-        'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h'
-    ]]
+    X = df[FEATURE_COLS]
     y = df['target_aqi_next_hour']
 
     X_train, X_val = X[~is_val], X[is_val]
