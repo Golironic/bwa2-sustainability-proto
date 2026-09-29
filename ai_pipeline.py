@@ -187,4 +187,7 @@ def predict_next_hour_aqi(recent_history_df: pd.DataFrame) -> float:
     
     return _caller.predict(recent_history_df)
 
+def get_available_regions() -> list:
+    """Public helper for Person 2 to inspect valid region options."""
+    return _caller.get_supported_regions()
 

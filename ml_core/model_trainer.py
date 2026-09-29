@@ -108,9 +108,16 @@ try:
         'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h'
     ]]
 
-    y = df['aqi_value']
+# 1. Create the future target: shift AQI backward by 1 row per region
+    df['target_aqi_next_hour'] = df.groupby('region')['aqi_value'].shift(-1)
 
-# 80/20 Chronological split
+    # 2. Shifting creates a NaN in the very last row of each region (since there is no "next hour" available). Drop these.
+    df = df.dropna(subset=['target_aqi_next_hour']).reset_index(drop=True)
+
+    # 3. Set y to the new future target
+    y = df['target_aqi_next_hour']
+
+    # 80/20 Chronological split
     split_idx = int(len(df) * 0.8)
     X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
     y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
