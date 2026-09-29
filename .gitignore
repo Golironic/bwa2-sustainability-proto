@@ -240,3 +240,5 @@ __pycache__/
 .DS_Store
 citize_report.html
 venv/
+.vscode/settings.json
+todo-list-of-features-and-challenges.txt

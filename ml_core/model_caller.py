@@ -10,6 +10,18 @@ MODEL_PATH = ML_DIR / "aqi_xgboost_model.json"
 CATEGORIES_PATH = ML_DIR / "region_categories.json"
 
 class AQICaller:
+    # Mapping known external aliases from Person 1/Person 2 to your trained categories
+    REGION_ALIASES = {
+        "delhi": "Delhi",
+        "delhi ncr": "Delhi",
+        "new delhi": "Delhi",
+        "gandhinagar": "Gandhinagar",
+        "mumbai": "Mumbai",
+        "gurgaon": "Gurugram",
+        "greater noida": "Noida",
+        "ludhiana station": "Ludhiana",
+        # Add any specific sub-grid tags Person 1 used for API limits
+    }
     def __init__(self, model_path=MODEL_PATH, categories_path=CATEGORIES_PATH):
         """
         Loads the XGBoost model weights and region category mappings into memory.
@@ -46,6 +58,50 @@ class AQICaller:
             'temperature_aqi', 'humidity_aqi', 'wind_speed_aqi', 'wind_direction_aqi'
         }
 
+    def get_supported_regions(self) -> list:
+        """Returns the list of valid region categories the model was trained on."""
+        return self.region_categories
+
+    def normalize_input_schema(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Maps standard Open-Meteo or raw BigQuery column aliases to required names.
+        """
+        df = df.copy()
+
+        # Unpack 'other_pollutants' if raw JSON string/dict exists from BigQuery
+        if 'other_pollutants' in df.columns:
+            def parse_other_pollutants(val):
+                if isinstance(val, str):
+                    try:
+                        return json.loads(val)
+                    except json.JSONDecodeError:
+                        return {}
+                elif isinstance(val, dict):
+                    return val
+                return {}
+
+            parsed_json = df['other_pollutants'].apply(parse_other_pollutants)
+            
+            if 'temperature_aqi' not in df.columns:
+                df['temperature_aqi'] = parsed_json.apply(lambda x: x.get('temperature'))
+            if 'humidity_aqi' not in df.columns:
+                df['humidity_aqi'] = parsed_json.apply(lambda x: x.get('relativehumidity'))
+            if 'wind_speed_aqi' not in df.columns:
+                df['wind_speed_aqi'] = parsed_json.apply(lambda x: x.get('wind_speed'))
+            if 'wind_direction_aqi' not in df.columns:
+                df['wind_direction_aqi'] = parsed_json.apply(lambda x: x.get('wind_direction'))
+
+        # Map common aliases
+        rename_dict = {
+            'us_aqi': 'aqi_value',
+            'temperature': 'temperature_aqi',
+            'relativehumidity': 'humidity_aqi',
+            'humidity': 'humidity_aqi',
+            'wind_speed': 'wind_speed_aqi',
+            'wind_direction': 'wind_direction_aqi'
+        }
+        return df.rename(columns=rename_dict)
+
     def predict(self, recent_history_df: pd.DataFrame) -> float:
         """
         Takes raw historical data for a region, constructs the 18 lag/rolling features,
@@ -58,6 +114,9 @@ class AQICaller:
         Returns:
             float: Predicted next-hour AQI (rounded to 2 decimal places).
         """
+
+        df = self.normalize_input_schema(recent_history_df)
+        
         # --- Validation Checks ---
         missing_cols = self.required_input_cols - set(recent_history_df.columns)
         if missing_cols:
@@ -73,6 +132,10 @@ class AQICaller:
         df = recent_history_df.copy()
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values(by='timestamp').reset_index(drop=True)
+
+        # Sanitize all region entries in the DataFrame
+        df['region'] = df['region'].apply(self.sanitize_region)
+        df['region'] = pd.Categorical(df['region'], categories=self.region_categories)
 
         # --- 18 Feature Engineering ---
         # AQI Lags
@@ -96,15 +159,38 @@ class AQICaller:
         df['dayofweek'] = df['timestamp'].dt.dayofweek
         df['month'] = df['timestamp'].dt.month
 
-        # Categorical Region Mapping
-        df['region'] = pd.Categorical(df['region'], categories=self.region_categories)
-
         # --- Extract Latest Row & Predict ---
         # The last row contains features calculated using all prior history
         latest_row = df.iloc[[-1]][self.feature_cols]
 
         prediction = self.model.predict(latest_row)[0]
         return float(np.round(prediction, 2))
+
+    def sanitize_region(self, input_region: str) -> str:
+        """Sanitizes incoming region strings to match region_categories.json."""
+        if not isinstance(input_region, str):
+            raise TypeError(f"Expected string for region, got {type(input_region).__name__}")
+
+        raw_region = input_region.strip()
+
+        # 1. Direct match
+        if raw_region in self.region_categories:
+            return raw_region
+
+        # 2. Alias lookup (case-insensitive)
+        if raw_region.lower() in self.REGION_ALIASES:
+            return self.REGION_ALIASES[raw_region.lower()]
+
+        # 3. Case-insensitive search across valid categories
+        for category in self.region_categories:
+            if category.lower() == raw_region.lower():
+                return category
+
+        # 4. If no match, raise explicit error with allowed categories
+        raise ValueError(
+            f"Region '{input_region}' is not supported by the ML model. "
+            f"Supported regions are: {self.region_categories}"
+        )
 
 # --- Run Fast Inference ---
 # if __name__ == "__main__":
