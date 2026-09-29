@@ -35,6 +35,8 @@ Requires:
     GOOGLE_APPLICATION_CREDENTIALS pointing to firebase-key.json
 """
 import os
+import csv
+import io
 import json
 import time
 import requests
@@ -492,23 +494,9 @@ Requires:
     .env with FIRMS_MAP_KEY=...
 """
 
-import os
-import csv
-import io
-import requests
-from datetime import datetime, timezone
-from google.cloud import bigquery
-from dotenv import load_dotenv
-
-load_dotenv()
-
 # ---- CONFIG ----
-os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", "firebase-key.json")
-
-PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "carc-f5b14")
 DATASET_ID = "air_quality"
 FIRMS_TABLE_ID = "fire_hotspots"
-
 FIRMS_MAP_KEY = os.environ.get("FIRMS_MAP_KEY")
 
 FIRMS_SOURCE = "VIIRS_NOAA20_NRT"

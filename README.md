@@ -13,8 +13,8 @@ The platform combines three data sources — government air quality monitors, we
 │  Data Pipeline    │     │  AI / ML          │     │  Frontend / Dashboard │
 │  (BigQuery)       │     │  (Gemini, Speech,  │     │  (Streamlit)          │
 │                   │     │   Translate,       │     │                       │
-│  - AQI (OpenAQ/    │     │   Vertex AI)       │     │  - Map view           │
-│    CPCB)           │     │                    │     │  - Forecast chart      │
+│  - AQI (OpenAQ/    │     │   XGBoost,        │     │  - Map view           │
+│    CPCB)           │     │   Pandas )        │     │  - Forecast chart      │
 │  - Weather (IMD/    │◄───┤  Reads citizen      │────►│  - Alerts panel        │
 │    OpenWeatherMap)  │     │  reports, writes    │     │  - Citizen report form │
 │  - Fire hotspots    │     │  ai_analysis to     │     │                       │
@@ -30,9 +30,9 @@ The platform combines three data sources — government air quality monitors, we
 
 | Track | Owner | Focus |
 |---|---|---|
-| **Data Pipeline & Backend** | Person 1 | Firestore schema, BigQuery ingestion (AQI, weather, fire), hotspot scoring |
-| **AI / ML Integration** | Person 2 | Gemini multimodal analysis, Speech-to-Text, Translation, Vertex AI forecasting |
-| **Frontend / Dashboard & Demo** | Person 3 | Streamlit dashboard, citizen report form, map layers, demo/pitch |
+| **Data Pipeline & Backend** | Parth Kabra | Firestore schema, BigQuery ingestion (AQI, weather, fire), hotspot scoring |
+| **AI / ML Integration** | Shikhar Parwal | Gemini multimodal analysis, Speech-to-Text, Translation, Vertex AI forecasting |
+| **Frontend / Dashboard & Demo** | Krish Jindal | Streamlit dashboard, citizen report form, map layers, demo/pitch |
 
 Each track can be built independently against the shared schema below — no work is blocked waiting on another track.
 
@@ -66,8 +66,8 @@ All integration happens through these exact field names. No additional coordinat
 ## How Integration Works
 
 - **Shared Firebase project** — no one needs their own; everyone connects using a shared `firebase-key.json` (distributed securely, not via public channels).
-- **AI → Dashboard** — Person 2 writes results into the `ai_analysis` field on the same Firestore document; Person 3 reads it directly. No separate integration step.
-- **Backend → Dashboard** — Person 3's Streamlit app queries BigQuery directly via the `google-cloud-bigquery` Python client, using the same credentials.
+- **AI → Dashboard** — Parth writes results into the `ai_analysis` field on the same Firestore document; Krish reads it directly. No separate integration step.
+- **Backend → Dashboard** — Krish's Streamlit app queries BigQuery directly via the `google-cloud-bigquery` Python client, using the same credentials.
 - **Unblocked development** — if a piece isn't ready yet, build against mock data matching the schema. Swapping mock for real data later is a one-line change as long as field names match.
 
 ## Getting Started
