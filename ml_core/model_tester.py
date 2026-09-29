@@ -1,33 +1,30 @@
 import json
 import os
+
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from google.cloud import bigquery
-from google.oauth2 import service_account
-from dotenv import load_dotenv
-from pathlib import Path
 
-load_dotenv()
+try:
+    from ml_core.config import MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS, TARGET_COL
+    from ml_core.features import add_features, assign_split
+except ImportError:  # run directly from inside ml_core/
+    from config import MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS, TARGET_COL
+    from features import add_features, assign_split
 
-# --- 1. Configurations & Model Loading ---
-ML_DIR = Path(__file__).resolve().parent
-
-MODEL_PATH = ML_DIR / "aqi_xgboost_model.json"
-CATEGORIES_PATH = ML_DIR / "region_categories.json"
-CSV_PATH = ML_DIR / "aqi_weather_historical.csv"
 USE_BIGQUERY = False  # Set to True if pulling directly from BigQuery
 
+# --- 1. Model Loading ---
 if not os.path.exists(MODEL_PATH) or not os.path.exists(CATEGORIES_PATH):
     raise FileNotFoundError(
-        "Model or categories file missing. Ensure 'aqi_xgboost_model.json' "
-        "and 'region_categories.json' are in the working directory."
+        "Model or categories file missing. Run model_trainer.py first "
+        "(expects aqi_xgboost_model.json and region_categories.json in ml_core/)."
     )
 
 print("📥 Loading saved model and regional metadata...")
 model = xgb.XGBRegressor()
-model.load_model(MODEL_PATH)
+model.load_model(str(MODEL_PATH))
 
 with open(CATEGORIES_PATH, "r") as f:
     region_categories = json.load(f)
@@ -35,6 +32,11 @@ with open(CATEGORIES_PATH, "r") as f:
 
 # --- 2. Load Evaluation Data ---
 if USE_BIGQUERY:
+    from dotenv import load_dotenv
+    from google.cloud import bigquery
+    from google.oauth2 import service_account
+    load_dotenv()
+
     project_id = os.environ.get("GCP_PROJECT_ID")
     credentials_path = os.environ.get("FIREBASE_CREDENTIALS_PATH")
     credentials = service_account.Credentials.from_service_account_file(credentials_path)
@@ -56,103 +58,56 @@ else:
     df = pd.read_csv(CSV_PATH)
 
 
-# --- 3. Reconstruct 18 Features (Matching Training Schema) ---
-def add_time_series_features(data):
-    data['timestamp'] = pd.to_datetime(data['timestamp'])
-    data = data.sort_values(by=['region', 'timestamp']).reset_index(drop=True)
+# --- 3. Same features, target and split as model_trainer.py ---
+print("🛠️ Processing lag features and preparing the held-out test split...")
+df_featured = add_features(df, training=True)
+split = assign_split(df_featured)
 
-    # AQI Lags
-    data['aqi_lag_1h'] = data.groupby('region')['aqi_value'].shift(1)
-    data['aqi_lag_2h'] = data.groupby('region')['aqi_value'].shift(2)
-    data['aqi_lag_3h'] = data.groupby('region')['aqi_value'].shift(3)
-    data['aqi_lag_24h'] = data.groupby('region')['aqi_value'].shift(24)
+test_df = df_featured[split == 'test'].copy()
+unknown = set(test_df['region']) - set(region_categories)
+if unknown:
+    raise ValueError(f"Regions in the data but not in region_categories.json: {unknown}. Retrain the model.")
+test_df['region'] = pd.Categorical(test_df['region'], categories=region_categories)
 
-    # Weather Lags
-    data['temp_lag_1h'] = data.groupby('region')['temperature_aqi'].shift(1)
-    data['wind_lag_1h'] = data.groupby('region')['wind_speed_aqi'].shift(1)
+X_test = test_df[FEATURE_COLS]
+y_test = test_df[TARGET_COL]
 
-    # Rolling Statistics
-    data['aqi_roll_mean_3h'] = data.groupby('region')['aqi_lag_1h'].transform(
-        lambda x: x.rolling(3, min_periods=1).mean()
-    )
-    data['aqi_roll_mean_6h'] = data.groupby('region')['aqi_lag_1h'].transform(
-        lambda x: x.rolling(6, min_periods=1).mean()
-    )
-    data['aqi_roll_mean_24h'] = data.groupby('region')['aqi_lag_1h'].transform(
-        lambda x: x.rolling(24, min_periods=1).mean()
-    )
-    data['aqi_roll_std_24h'] = data.groupby('region')['aqi_lag_1h'].transform(
-        lambda x: x.rolling(24, min_periods=1).std()
-    )
-
-    return data.dropna().reset_index(drop=True)
-
-print("🛠️ Processing lag features and preparing validation split...")
-df_featured = add_time_series_features(df)
-
-# Temporal & Categorical Features
-df_featured['hour'] = df_featured['timestamp'].dt.hour
-df_featured['dayofweek'] = df_featured['timestamp'].dt.dayofweek
-df_featured['month'] = df_featured['timestamp'].dt.month
-df_featured['region'] = pd.Categorical(df_featured['region'], categories=region_categories)
-
-feature_cols = [
-    'hour', 'dayofweek', 'month', 'region',
-    'temperature_aqi', 'humidity_aqi', 'wind_speed_aqi', 'wind_direction_aqi',
-    'aqi_lag_1h', 'aqi_lag_2h', 'aqi_lag_3h', 'aqi_lag_24h',
-    'temp_lag_1h', 'wind_lag_1h',
-    'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h'
-]
-
-X = df_featured[feature_cols]
-y = df_featured['aqi_value']
-
-# Re-create identical chronological validation slice (last 20%)
-split_idx = int(len(df_featured) * 0.8)
-X_val = X.iloc[split_idx:]
-y_val = y.iloc[split_idx:]
-val_df = df_featured.iloc[split_idx:]
-
-print(f"🔬 Evaluating on {len(X_val)} validation rows...")
+print(f"🔬 Evaluating on {len(X_test)} test rows (never used for training or early stopping)...")
 
 
 # --- 4. Predictions & Global Accuracy Metrics ---
-y_pred = model.predict(X_val)
+y_pred = model.predict(X_test)
 
-mae = mean_absolute_error(y_val, y_pred)
-mse = mean_squared_error(y_val, y_pred)
+mae = mean_absolute_error(y_test, y_pred)
+mse = mean_squared_error(y_test, y_pred)
 rmse = np.sqrt(mse)
-r2 = r2_score(y_val, y_pred)
-mape = np.mean(np.abs((y_val - y_pred) / y_val)) * 100
+r2 = r2_score(y_test, y_pred)
+nonzero = y_test > 0  # MAPE is undefined where the actual AQI is 0
+mape = np.mean(np.abs((y_test[nonzero] - y_pred[nonzero]) / y_test[nonzero])) * 100
 
 print("\n" + "=" * 50)
-print("📊 GLOBAL MODEL ACCURACY METRICS")
+print("📊 GLOBAL MODEL ACCURACY METRICS (next-hour AQI)")
 print("=" * 50)
 print(f"R² Score (Variance Explained) : {r2:.4f} ({r2 * 100:.2f}%)")
 print(f"MAE  (Mean Absolute Error)     : {mae:.2f} AQI points")
 print(f"RMSE (Root Mean Squared Error) : {rmse:.2f} AQI points")
-print(f"MAPE (Mean Absolute % Error)  : {mape:.2f}%")
+print(f"MAPE (Mean Absolute % Error)  : {mape:.2f}%  (rows with actual AQI = 0 excluded)")
 print("=" * 50)
 
 
 # --- 5. Regional Accuracy Breakdown ---
-val_df_copy = val_df.copy()
-val_df_copy['predicted_aqi'] = y_pred
-val_df_copy['error'] = np.abs(val_df_copy['aqi_value'] - val_df_copy['predicted_aqi'])
+res = test_df.copy()
+res['predicted_aqi'] = y_pred
+res['error'] = np.abs(res[TARGET_COL] - res['predicted_aqi'])
 
 regional_metrics = []
-for region_name, group in val_df_copy.groupby('region', observed=False):
-    if len(group) == 0:
-        continue
-    r_mae = mean_absolute_error(group['aqi_value'], group['predicted_aqi'])
-    r_rmse = np.sqrt(mean_squared_error(group['aqi_value'], group['predicted_aqi']))
-    r_r2 = r2_score(group['aqi_value'], group['predicted_aqi'])
+for region_name, group in res.groupby('region', observed=True):
     regional_metrics.append({
         'Region': region_name,
         'Samples': len(group),
-        'MAE': round(r_mae, 2),
-        'RMSE': round(r_rmse, 2),
-        'R²': round(r_r2, 4)
+        'MAE': round(mean_absolute_error(group[TARGET_COL], group['predicted_aqi']), 2),
+        'RMSE': round(np.sqrt(mean_squared_error(group[TARGET_COL], group['predicted_aqi'])), 2),
+        'R²': round(r2_score(group[TARGET_COL], group['predicted_aqi']), 4)
     })
 
 reg_summary_df = pd.DataFrame(regional_metrics).sort_values('MAE')
@@ -162,7 +117,7 @@ print(reg_summary_df.to_string(index=False))
 
 # --- 6. Feature Importance Ranking ---
 importance_df = pd.DataFrame({
-    'Feature': feature_cols,
+    'Feature': FEATURE_COLS,
     'Importance_Score': model.feature_importances_
 }).sort_values('Importance_Score', ascending=False)
 
@@ -173,8 +128,8 @@ print(importance_df.head(10).to_string(index=False))
 
 
 # --- 7. Random Prediction Comparison Sample ---
-sample_comparison = val_df_copy[['timestamp', 'region', 'aqi_value', 'predicted_aqi', 'error']].sample(10, random_state=42)
-sample_comparison = sample_comparison.rename(columns={'aqi_value': 'actual_aqi'}).round(2)
+sample_comparison = res[['timestamp', 'region', TARGET_COL, 'predicted_aqi', 'error']].sample(10, random_state=42)
+sample_comparison = sample_comparison.rename(columns={TARGET_COL: 'actual_next_hour_aqi'}).round(2)
 
 print("\n" + "=" * 50)
 print("👀 RANDOM 10 PREDICTION COMPARISON SAMPLES")

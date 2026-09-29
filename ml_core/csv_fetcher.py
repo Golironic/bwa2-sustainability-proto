@@ -1,26 +1,29 @@
-import os
-import requests
-import pandas as pd
-from dotenv import load_dotenv
+import time
 from pathlib import Path
 
-load_dotenv()
+import pandas as pd
+import requests
 
-ML_DIR = Path(__file__).resolve().parent
-CSV_PATH = ML_DIR / "aqi_weather_historical.csv"
+try:
+    from ml_core.config import CSV_PATH
+except ImportError:  # run directly from inside ml_core/
+    from config import CSV_PATH
 
+# Setup target regions and coordinates
 REGIONS = {
     "Delhi": {"lat": 28.6139, "lon": 77.2090},
     "Mumbai": {"lat": 19.0760, "lon": 72.8777},
     "Gandhinagar": {"lat": 23.2156, "lon": 72.6369},
-    "Punjab": {"lat": 30.9010, "lon": 75.8573},
+    "Punjab": {"lat": 30.9010, "lon": 75.8573},  # Ludhiana station
+
     "Gurugram": {"lat": 28.4595, "lon": 77.0266},
     "Noida": {"lat": 28.5355, "lon": 77.3910},
     "Faridabad": {"lat": 28.4089, "lon": 77.3178},
+
     "Ghaziabad": {"lat": 28.6692, "lon": 77.4538},
-    "Ludhiana": {"lat": 30.9010, "lon": 75.8573},
     "Amritsar": {"lat": 31.6340, "lon": 74.8723},
     "Patiala": {"lat": 30.3398, "lon": 76.3869},
+
     "Bathinda": {"lat": 30.2110, "lon": 74.9455},
     "Jalandhar": {"lat": 31.3260, "lon": 75.5762}
 }
@@ -28,72 +31,116 @@ REGIONS = {
 START_DATE = "2024-01-01"
 END_DATE = "2026-08-31"
 
-# Identical math from Person 1's fetch_aqi_weather.py
-PM25_BREAKPOINTS = [
-    (0.0, 12.0, 0, 50), (12.1, 35.4, 51, 100), (35.5, 55.4, 101, 150),
-    (55.5, 150.4, 151, 200), (150.5, 250.4, 201, 300), 
-    (250.5, 350.4, 301, 400), (350.5, 500.4, 401, 500)
-]
+REQUEST_TIMEOUT = 120   # seconds
+MAX_RETRIES = 4
 
-def pm25_to_aqi(pm25):
-    if pd.isna(pm25) or pm25 < 0:
-        return None
-    c = int(pm25 * 10) / 10.0
-    for c_lo, c_hi, aqi_lo, aqi_hi in PM25_BREAKPOINTS:
-        if c_lo <= c <= c_hi:
-            return round(((aqi_hi - aqi_lo) / (c_hi - c_lo)) * (c - c_lo) + aqi_lo, 1)
-    return 500.0
+
+def get_json(url, params, label):
+    """GET with timeout, HTTP status check and retry/backoff (Open-Meteo rate limits with 429)."""
+    last_err = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            if resp.status_code == 429 or resp.status_code >= 500:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and data.get("error"):
+                raise ValueError(f"API error: {data.get('reason', data)}")
+            return data
+        except ValueError as e:                 # API said the request itself is bad: don't retry
+            raise RuntimeError(f"{label}: {e}") from None
+        except (requests.RequestException, RuntimeError) as e:
+            last_err = e
+            if attempt < MAX_RETRIES:
+                wait = 5 * 2 ** (attempt - 1)
+                print(f"  {label}: {e}; retrying in {wait}s ({attempt}/{MAX_RETRIES})")
+                time.sleep(wait)
+    raise RuntimeError(f"{label}: failed after {MAX_RETRIES} attempts ({last_err})")
+
 
 def fetch_region_data(region_name, lat, lon, start_date, end_date):
-    print(f"Fetching data for {region_name}...")
-    
-    # 1. Weather
-    w_res = requests.get("https://archive-api.open-meteo.com/v1/archive", params={
-        "latitude": lat, "longitude": lon, "start_date": start_date, "end_date": end_date,
-        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m"
-    }).json().get("hourly", {})
-    
+    print(f"Fetching real historical data for {region_name}...")
+
+    # 1. Fetch Open-Meteo Historical Weather
+    res_w = get_json(
+        "https://archive-api.open-meteo.com/v1/archive",
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": start_date,
+            "end_date": end_date,
+            "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m"
+        },
+        f"{region_name} weather",
+    )
+    hourly_w = res_w.get("hourly")
+    if not hourly_w or "time" not in hourly_w:
+        raise RuntimeError(f"{region_name} weather: response had no hourly data: {str(res_w)[:200]}")
+
     df_w = pd.DataFrame({
-        "timestamp": w_res["time"],
-        "temperature_aqi": w_res["temperature_2m"],
-        "humidity_aqi": w_res["relative_humidity_2m"],
-        "wind_speed_aqi": w_res["wind_speed_10m"],
-        "wind_direction_aqi": w_res["wind_direction_10m"]
+        "timestamp": hourly_w["time"],
+        "temperature": hourly_w["temperature_2m"],
+        "relativehumidity": hourly_w["relative_humidity_2m"],
+        "wind_speed": hourly_w["wind_speed_10m"],
+        "wind_direction": hourly_w["wind_direction_10m"]
     })
 
-    # 2. AQI (Fetch PM2.5 and convert manually to match backend contract)
-    aq_res = requests.get("https://air-quality-api.open-meteo.com/v1/air-quality", params={
-        "latitude": lat, "longitude": lon, "start_date": start_date, "end_date": end_date,
-        "hourly": "pm2_5"
-    }).json().get("hourly", {})
-    
-    df_aq = pd.DataFrame({"timestamp": aq_res["time"], "pm2_5": aq_res["pm2_5"]})
-    df_aq["aqi_value"] = df_aq["pm2_5"].apply(pm25_to_aqi)
+    # 2. Fetch Open-Meteo Air Quality Reanalysis Data
+    res_aq = get_json(
+        "https://air-quality-api.open-meteo.com/v1/air-quality",
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": start_date,
+            "end_date": end_date,
+            "hourly": "us_aqi"
+        },
+        f"{region_name} air quality",
+    )
+    hourly_aq = res_aq.get("hourly")
+    if not hourly_aq or "time" not in hourly_aq:
+        raise RuntimeError(f"{region_name} air quality: response had no hourly data: {str(res_aq)[:200]}")
 
-# Merge weather and AQI
-    df = pd.merge(df_w, df_aq, on="timestamp", how="inner").drop(columns=["pm2_5"])
-    
-    # Forward fill up to 3 consecutive missing hours per region before dropping
-    df["aqi_value"] = df["aqi_value"].ffill(limit=3)
+    df_aq = pd.DataFrame({
+        "timestamp": hourly_aq["time"],
+        "us_aqi": hourly_aq["us_aqi"]
+    })
+
+    # Merge weather and AQI on timestamp
+    df = pd.merge(df_w, df_aq, on="timestamp", how="inner")
     df["region"] = region_name
     return df
 
-all_frames = [fetch_region_data(r, c["lat"], c["lon"], START_DATE, END_DATE) for r, c in REGIONS.items()]
-full_df = pd.concat(all_frames, ignore_index=True).dropna()
 
-full_df.to_csv(str(CSV_PATH), index=False)
-print(f"Saved aligned PM2.5 dataset to '{CSV_PATH}'")
+def main():
+    # Download for all regions (a failure names the region and stops - no partial CSV)
+    all_frames = []
+    for region, coords in REGIONS.items():
+        all_frames.append(fetch_region_data(region, coords["lat"], coords["lon"], START_DATE, END_DATE))
+        time.sleep(1)  # be polite to the free API
 
-# --- OPTION A: Save as Local CSV (For quick offline XGBoost training) ---
-# csv_df = full_df.rename(columns={
-#     "us_aqi": "aqi_value",
-#     "temperature": "temperature_aqi",
-#     "relativehumidity": "humidity_aqi",
-#     "wind_speed": "wind_speed_aqi",
-#     "wind_direction": "wind_direction_aqi"
-# })
-# csv_df.to_csv(str(CSV_PATH), index=False)
-# print(f"Saved local dataset to '{CSV_PATH}' for XGBoost training.")
+    full_df = pd.concat(all_frames, ignore_index=True)
+
+    # Drop rows with null values to clean training dataset
+    full_df = full_df.dropna(subset=["us_aqi", "temperature", "relativehumidity", "wind_speed", "wind_direction"])
+
+    print(f"\nFetched total {len(full_df)} hourly records across all regions.")
+
+    # --- OPTION A: Save as Local CSV (For quick offline XGBoost training) ---
+    csv_df = full_df.rename(columns={
+        "us_aqi": "aqi_value",
+        "temperature": "temperature_aqi",
+        "relativehumidity": "humidity_aqi",
+        "wind_speed": "wind_speed_aqi",
+        "wind_direction": "wind_direction_aqi"
+    })
+    csv_df.to_csv(str(CSV_PATH), index=False)
+    print(f"Saved local dataset to '{CSV_PATH}' for XGBoost training.")
+
+
+if __name__ == "__main__":
+    main()
 
 
 # --- OPTION B: Load to GCP BigQuery (Matches your SQL schema) ---
