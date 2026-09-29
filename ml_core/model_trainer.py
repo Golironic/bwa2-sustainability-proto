@@ -97,8 +97,9 @@ try:
     df['month'] = df['timestamp'].dt.month
     df['region'] = df['region'].astype('category')
 
-# 1. Create the future target: shift AQI backward by 1 row per region
+    # 1. Create the future target: shift AQI backward by 1 row per region
     df['target_aqi_next_hour'] = df.groupby('region')['aqi_value'].shift(-1)
+
     # 2. Shifting creates a NaN in the very last row of each region (since there is no "next hour" available). Drop these.
     df = df.dropna(subset=['target_aqi_next_hour']).reset_index(drop=True)
 
