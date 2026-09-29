@@ -90,13 +90,17 @@ def add_time_series_features(df):
 try:
     print("Engineering temporal, lag, and rolling features...")
     df = add_time_series_features(df);
-
-    # 2. Feature Engineering (Prepare temporal features locally)
+# 2. Feature Engineering (Prepare temporal features locally)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df['hour'] = df['timestamp'].dt.hour
     df['dayofweek'] = df['timestamp'].dt.dayofweek
     df['month'] = df['timestamp'].dt.month
     df['region'] = df['region'].astype('category')
+
+# 1. Create the future target: shift AQI backward by 1 row per region
+    df['target_aqi_next_hour'] = df.groupby('region')['aqi_value'].shift(-1)
+    # 2. Shifting creates a NaN in the very last row of each region (since there is no "next hour" available). Drop these.
+    df = df.dropna(subset=['target_aqi_next_hour']).reset_index(drop=True)
 
     # Features (X) vs Target (y)
     X = df[[
@@ -107,12 +111,6 @@ try:
         'temp_lag_1h', 'wind_lag_1h',
         'aqi_roll_mean_3h', 'aqi_roll_mean_6h', 'aqi_roll_mean_24h', 'aqi_roll_std_24h'
     ]]
-
-# 1. Create the future target: shift AQI backward by 1 row per region
-    df['target_aqi_next_hour'] = df.groupby('region')['aqi_value'].shift(-1)
-
-    # 2. Shifting creates a NaN in the very last row of each region (since there is no "next hour" available). Drop these.
-    df = df.dropna(subset=['target_aqi_next_hour']).reset_index(drop=True)
 
     # 3. Set y to the new future target
     y = df['target_aqi_next_hour']
@@ -143,7 +141,7 @@ try:
     model.fit(
         X_train, y_train,
         eval_set=[(X_val, y_val)],
-        verbose=100  # Logs training progress every 100 trees
+        verbose=1000  # Logs training progress every 100 trees
     )
 
     print(f"\n✅ Training complete! Best tree iteration: {model.best_iteration}")
