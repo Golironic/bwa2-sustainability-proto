@@ -43,7 +43,7 @@ jsonschema-specifications==2025.9.1
 MarkupSafe==3.0.3
 msgpack==1.2.2
 narwhals==2.26.0
-numpy==2.5.3
+numpy
 opentelemetry-api==1.45.0
 packaging==26.3
 pandas==3.0.6
