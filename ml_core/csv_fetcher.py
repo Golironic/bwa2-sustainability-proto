@@ -16,13 +16,11 @@ REGIONS = {
     "Gandhinagar": {"lat": 23.2156, "lon": 72.6369},
     "Punjab": {"lat": 30.9010, "lon": 75.8573},  # Ludhiana station
 
-    "Delhi": {"lat": 28.6139, "lon": 77.2090},
     "Gurugram": {"lat": 28.4595, "lon": 77.0266},
     "Noida": {"lat": 28.5355, "lon": 77.3910},
     "Faridabad": {"lat": 28.4089, "lon": 77.3178},
 
     "Ghaziabad": {"lat": 28.6692, "lon": 77.4538},
-    "Ludhiana": {"lat": 30.9010, "lon": 75.8573},
     "Amritsar": {"lat": 31.6340, "lon": 74.8723},
     "Patiala": {"lat": 30.3398, "lon": 76.3869},
 
