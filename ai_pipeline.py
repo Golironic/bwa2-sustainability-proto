@@ -22,7 +22,7 @@ load_dotenv()  # Load environment variables from .env file
 _caller = AQICaller()
 
 # 1. Initialize Gemini Client (Make sure GEMINI_API_KEY is in your environment variables)
-client = genai.Client(api_key=os.environ.get("GEMINI_API_Key"))
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # 2. Initialize Firebase Firestore (Make sure your service account JSON file is downloaded)
 cred = credentials.Certificate(os.environ.get("FIREBASE_CREDENTIALS_PATH"))
