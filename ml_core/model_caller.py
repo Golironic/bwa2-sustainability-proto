@@ -1,5 +1,4 @@
 import json
-from altair import When
 import pandas as pd
 import xgboost as xgb
 from pathlib import Path
@@ -63,6 +62,46 @@ class AQICaller:
         """Returns the list of valid region categories the model was trained on."""
         return self.region_categories
 
+    def normalize_input_schema(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Maps standard Open-Meteo or raw BigQuery column aliases to required names.
+        """
+        df = df.copy()
+
+        # Unpack 'other_pollutants' if raw JSON string/dict exists from BigQuery
+        if 'other_pollutants' in df.columns:
+            def parse_other_pollutants(val):
+                if isinstance(val, str):
+                    try:
+                        return json.loads(val)
+                    except json.JSONDecodeError:
+                        return {}
+                elif isinstance(val, dict):
+                    return val
+                return {}
+
+            parsed_json = df['other_pollutants'].apply(parse_other_pollutants)
+            
+            if 'temperature_aqi' not in df.columns:
+                df['temperature_aqi'] = parsed_json.apply(lambda x: x.get('temperature'))
+            if 'humidity_aqi' not in df.columns:
+                df['humidity_aqi'] = parsed_json.apply(lambda x: x.get('relativehumidity'))
+            if 'wind_speed_aqi' not in df.columns:
+                df['wind_speed_aqi'] = parsed_json.apply(lambda x: x.get('wind_speed'))
+            if 'wind_direction_aqi' not in df.columns:
+                df['wind_direction_aqi'] = parsed_json.apply(lambda x: x.get('wind_direction'))
+
+        # Map common aliases
+        rename_dict = {
+            'us_aqi': 'aqi_value',
+            'temperature': 'temperature_aqi',
+            'relativehumidity': 'humidity_aqi',
+            'humidity': 'humidity_aqi',
+            'wind_speed': 'wind_speed_aqi',
+            'wind_direction': 'wind_direction_aqi'
+        }
+        return df.rename(columns=rename_dict)
+
     def predict(self, recent_history_df: pd.DataFrame) -> float:
         """
         Takes raw historical data for a region, constructs the 18 lag/rolling features,
@@ -75,6 +114,9 @@ class AQICaller:
         Returns:
             float: Predicted next-hour AQI (rounded to 2 decimal places).
         """
+
+        df = self.normalize_input_schema(recent_history_df)
+        
         # --- Validation Checks ---
         missing_cols = self.required_input_cols - set(recent_history_df.columns)
         if missing_cols:
