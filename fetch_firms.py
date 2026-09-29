@@ -32,6 +32,7 @@ import requests
 from datetime import datetime, timezone
 from google.cloud import bigquery
 from dotenv import load_dotenv
+from google.api_core.exceptions import NotFound
 
 load_dotenv()
 
@@ -64,7 +65,7 @@ def ensure_table(table_id, schema):
     table_ref = f"{dataset_ref}.{table_id}"
     try:
         client.get_table(table_ref)
-    except Exception:
+    except NotFound:
         table = bigquery.Table(table_ref, schema=schema)
         client.create_table(table)
         print(f"Created table {table_ref}")
