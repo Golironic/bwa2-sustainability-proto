@@ -32,6 +32,8 @@ jobs:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           FIREBASE_CREDENTIALS_PATH: firebase-key.json
           GOOGLE_APPLICATION_CREDENTIALS: firebase-key.json
+          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY}}
         run: |
           python fetch_aqi_weather.py
           python fetch_firms.py
