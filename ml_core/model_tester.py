@@ -16,6 +16,7 @@ try:
     from ml_core.config import ML_DIR, MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS
 except ImportError:  # run directly from inside ml_core/
     from config import ML_DIR, MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS
+
 USE_BIGQUERY = False  # Set to True if pulling directly from BigQuery
 
 if not os.path.exists(MODEL_PATH) or not os.path.exists(CATEGORIES_PATH):

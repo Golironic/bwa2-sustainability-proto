@@ -4,10 +4,12 @@ import pandas as pd
 from dotenv import load_dotenv
 from pathlib import Path
 
-load_dotenv()
+try:
+    from ml_core.config import ML_DIR, CSV_PATH
+except ImportError:  # run directly from inside ml_core/
+    from config import ML_DIR, CSV_PATH
 
-ML_DIR = Path(__file__).resolve().parent
-CSV_PATH = ML_DIR / "aqi_weather_historical.csv"
+load_dotenv()
 
 REGIONS = {
     "Delhi": {"lat": 28.6139, "lon": 77.2090},
@@ -18,7 +20,6 @@ REGIONS = {
     "Noida": {"lat": 28.5355, "lon": 77.3910},
     "Faridabad": {"lat": 28.4089, "lon": 77.3178},
     "Ghaziabad": {"lat": 28.6692, "lon": 77.4538},
-    "Ludhiana": {"lat": 30.9010, "lon": 75.8573},
     "Amritsar": {"lat": 31.6340, "lon": 74.8723},
     "Patiala": {"lat": 30.3398, "lon": 76.3869},
     "Bathinda": {"lat": 30.2110, "lon": 74.9455},
