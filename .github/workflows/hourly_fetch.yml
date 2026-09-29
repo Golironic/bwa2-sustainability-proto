@@ -25,12 +25,13 @@ jobs:
         env:
           GCP_CRED: ${{ secrets.GCP_CREDENTIALS_JSON }}
         run: |
-          echo "$GCP_CRED" > credentials.json
+          echo "$GCP_CRED" > firebase-key.json
           
       - name: Run Fetchers
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          FIREBASE_CREDENTIALS_PATH: credentials.json
+          FIREBASE_CREDENTIALS_PATH: firebase-key.json
+          GOOGLE_APPLICATION_CREDENTIALS: firebase-key.json
         run: |
           python fetch_aqi_weather.py
           python fetch_firms.py
