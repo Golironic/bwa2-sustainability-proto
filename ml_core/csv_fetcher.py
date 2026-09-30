@@ -180,7 +180,6 @@ if __name__ == "__main__":
 #             bigquery.SchemaField("region", "STRING"),
 #             bigquery.SchemaField("other_pollutants", "JSON"),
 #         ],
-#         write_disposition="WRITE_TRUNCATE"  # Replaces existing baseline sample data
 #     )
 
 #     job = bq_client.load_table_from_dataframe(df_bq, table_ref, job_config=job_config)
