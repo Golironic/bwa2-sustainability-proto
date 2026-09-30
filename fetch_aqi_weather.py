@@ -94,40 +94,27 @@ REGIONS = {
 }
 
 # ---- BIGQUERY SETUP ----
-_client = None
-
-def get_client():
-    """Return a shared BigQuery client, created lazily on first call.
-
-    Keeping construction here (rather than at module level) means that
-    importing this module does NOT open a GCP connection, so local testing
-    and `--help` flags work without credentials.
-    """
-    global _client
-    if _client is None:
-        _client = bigquery.Client(project=PROJECT_ID)
-    return _client
-
+client = bigquery.Client(project=PROJECT_ID)
 dataset_ref = f"{PROJECT_ID}.{DATASET_ID}"
 
 
 def ensure_dataset():
     try:
-        get_client().get_dataset(dataset_ref)
+        client.get_dataset(dataset_ref)
     except Exception:
         ds = bigquery.Dataset(dataset_ref)
         ds.location = "asia-south1"
-        get_client().create_dataset(ds)
+        client.create_dataset(ds)
         print(f"Created dataset {dataset_ref}")
 
 
 def ensure_table(table_id, schema):
     table_ref = f"{dataset_ref}.{table_id}"
     try:
-        get_client().get_table(table_ref)
+        client.get_table(table_ref)
     except Exception:
         table = bigquery.Table(table_ref, schema=schema)
-        get_client().create_table(table)
+        client.create_table(table)
         print(f"Created table {table_ref}")
     return table_ref
 
@@ -198,7 +185,7 @@ def existing_keys(table_id, key_fields, hours=DEDUPE_LOOKBACK_HOURS):
         WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {hours} HOUR)
     """
     try:
-        return {tuple(row[f] for f in key_fields) for row in get_client().query(query).result()}
+        return {tuple(row[f] for f in key_fields) for row in client.query(query).result()}
     except Exception as e:
         print(f"  Warning: could not read existing keys from {table_id} ({e}); skipping dedupe")
         return set()
@@ -260,12 +247,9 @@ def build_station_row(loc, region_name, headers, cutoff):
     station_lat, station_lon = coords.get("latitude"), coords.get("longitude")
 
     for reading in latest_results:
-        ts = (reading.get("datetime") or {}).get("utc")
-        if ts and parse_ts(ts) < cutoff:
-            continue  # ignore this specific sensor reading if it's stale
-
         param = sensor_meta.get(reading.get("sensorsId"), "")
         value = reading.get("value")
+        ts = (reading.get("datetime") or {}).get("utc")
         if ts and (latest_ts is None or parse_ts(ts) > parse_ts(latest_ts)):
             latest_ts = ts
         rc = reading.get("coordinates")
@@ -410,7 +394,7 @@ def load_rows(rows, table_ref, label):
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
     )
-    job = get_client().load_table_from_json(rows, table_ref, job_config=job_config)
+    job = client.load_table_from_json(rows, table_ref, job_config=job_config)
     job.result()
     if job.errors:
         print(f"{label} insert errors:", job.errors)
@@ -421,7 +405,7 @@ def load_rows(rows, table_ref, label):
 # ---- MAIN ----
 def main():
     if not OPENAQ_API_KEY:
-        raise RuntimeError("OPENAQ_API_KEY not set - add it to .env")
+        raise SystemExit("OPENAQ_API_KEY not set - add it to .env")
 
     ensure_dataset()
     aqi_table = ensure_table(TABLE_ID, AQI_SCHEMA)
