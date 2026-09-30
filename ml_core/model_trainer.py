@@ -7,15 +7,6 @@ from google.cloud import bigquery
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 
-# --- Paths, feature list and shared feature engineering ---
-try:
-    from ml_core.config import MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS, TARGET_COL
-    from ml_core.features import add_features, assign_split
-except ImportError:  # run directly from inside ml_core/
-    from config import MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS, TARGET_COL
-    from features import add_features, assign_split
-
-USE_BIGQUERY = False  # Set to True if pulling directly from BigQuery
 load_dotenv()
 # --- Setup Absolute Paths relative to THIS script ---
 ML_DIR = Path(__file__).resolve().parent
