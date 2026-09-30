@@ -178,7 +178,7 @@ def score_report_density(report, all_reports):
         if other["id"] == report["id"]:
             continue
         created = as_utc(other["created_at"])
-        if created and created < cutoff:
+        if created is None or created < cutoff:
             continue
         if haversine_km(lat, lon, other["lat"], other["lon"]) <= REPORT_RADIUS_KM:
             severity = other.get("severity") or 3
@@ -214,9 +214,8 @@ def score_aqi_absolute(aqi_value):
     return max(0.0, min(frac, 1.0)) * 100
 
 
-def score_aqi_deviation(report, aqi_rows):
-    """How far the nearest station is above its region's baseline (50%+ = max)."""
-    nearest = nearest_station(report, aqi_rows)
+def score_aqi_deviation(nearest):
+    """How far the station is above its region's baseline (50%+ = max)."""
     if nearest is None:
         return 0.0
     baseline = nearest["region_baseline_aqi"] or 0
@@ -228,15 +227,13 @@ def score_aqi_deviation(report, aqi_rows):
 
 
 def score_aqi(report, aqi_rows):
-    """Blend of absolute level and deviation. Returns all three numbers."""
     nearest = nearest_station(report, aqi_rows)
     if nearest is None:
         return {"combined": 0.0, "absolute": 0.0, "deviation": 0.0}
     absolute = score_aqi_absolute(nearest["aqi_value"])
-    deviation = score_aqi_deviation(report, aqi_rows)
+    deviation = score_aqi_deviation(nearest)
     combined = AQI_ABS_WEIGHT * absolute + (1 - AQI_ABS_WEIGHT) * deviation
     return {"combined": combined, "absolute": absolute, "deviation": deviation}
-
 
 def compute_hotspot_score(report, all_reports, fires, aqi_rows):
     density = score_report_density(report, all_reports)
