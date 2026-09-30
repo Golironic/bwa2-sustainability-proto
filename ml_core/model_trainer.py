@@ -16,6 +16,13 @@ except ImportError:  # run directly from inside ml_core/
     from features import add_features, assign_split
 
 USE_BIGQUERY = False  # Set to True if pulling directly from BigQuery
+
+
+def load_raw_data() -> pd.DataFrame:
+    if not USE_BIGQUERY:
+        df = pd.read_csv(CSV_PATH)
+        print(f"Loaded {len(df)} rows from local CSV.")
+        return df
 load_dotenv()
 # --- Setup Absolute Paths relative to THIS script ---
 ML_DIR = Path(__file__).resolve().parent
