@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -56,7 +56,8 @@ aqi_df = ds.get_aqi_readings()
 fire_df = ds.get_fire_hotspots()
 reports_df = ds.get_citizen_reports()
 
-avg_aqi = float(aqi_df["aqi_value"].mean()) if not aqi_df.empty else 0.0
+mean_val = aqi_df["aqi_value"].mean() if not aqi_df.empty else 0.0
+avg_aqi = float(mean_val) if not pd.isna(mean_val) else 0.0
 st.markdown(theme.render_sky_strip(avg_aqi), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
@@ -299,7 +300,7 @@ with tab_report:
                 "category": category,
                 "text": text,
                 "language": language,
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
             }
             ds.submit_citizen_report(report, photo_file=photo, voice_file=voice)
             st.success("Report submitted. Person 2's Gemini pipeline will pick it up on the next run.")

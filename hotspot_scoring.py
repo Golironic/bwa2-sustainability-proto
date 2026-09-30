@@ -82,7 +82,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
-    return 2 * R * math.asin(math.sqrt(a))
+    return 2 * R * math.asin(math.sqrt(max(0.0, min(1.0, a))))
 
 
 def as_utc(dt):

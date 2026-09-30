@@ -12,7 +12,7 @@ except ImportError:  # run directly from inside ml_core/
     from config import MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS, TARGET_COL
     from features import add_features, assign_split
 
-USE_BIGQUERY = False
+USE_BIGQUERY = True
 
 
 def load_raw_data() -> pd.DataFrame:
@@ -28,7 +28,7 @@ def load_raw_data() -> pd.DataFrame:
     load_dotenv()
 
     project_id = os.environ.get("GCP_PROJECT_ID")
-    credentials_path = os.environ.get("FIREBASE_CREDENTIALS_PATH")
+    credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     credentials = service_account.Credentials.from_service_account_file(credentials_path)
     bq_client = bigquery.Client(credentials=credentials, project=project_id)
 
@@ -37,18 +37,22 @@ def load_raw_data() -> pd.DataFrame:
     TABLE_NAME_THREE = "fire_hotspots"
 
     sql_query = f"""
-        SELECT
-            aqi.timestamp,
-            aqi.aqi_value,
-            aqi.region,
-            SAFE_CAST(JSON_VALUE(aqi.other_pollutants, '$.temperature') AS FLOAT64) AS temperature_aqi,
-            SAFE_CAST(JSON_VALUE(aqi.other_pollutants, '$.wind_speed') AS FLOAT64) AS wind_speed_aqi,
-            SAFE_CAST(JSON_VALUE(aqi.other_pollutants, '$.relativehumidity') AS FLOAT64) AS humidity_aqi,
-            SAFE_CAST(JSON_VALUE(aqi.other_pollutants, '$.wind_direction') AS FLOAT64) AS wind_direction_aqi
-        FROM `{project_id}.{DATASET_NAME}.{TABLE_NAME_ONE}` AS aqi
-        WHERE aqi.timestamp IS NOT NULL
-        AND aqi_value IS NOT NULL
-        ORDER BY aqi.timestamp ASC
+        SELECT a.ts AS timestamp, a.aqi_value, a.region,
+               w.temperature_c AS temperature_aqi, w.humidity_pct AS humidity_aqi, w.wind_speed_kmh AS wind_speed_aqi, w.wind_direction_deg AS wind_direction_aqi
+        FROM (
+          SELECT TIMESTAMP_TRUNC(timestamp, HOUR) AS ts, region, AVG(aqi_value) AS aqi_value
+          FROM `{project_id}.{DATASET_NAME}.{TABLE_NAME_ONE}`
+          WHERE aqi_value IS NOT NULL
+          GROUP BY ts, region
+        ) a
+        JOIN (
+          SELECT TIMESTAMP_TRUNC(timestamp, HOUR) AS ts, region, AVG(temperature_c) AS temperature_c,
+                 AVG(humidity_pct) AS humidity_pct, AVG(wind_speed_kmh) AS wind_speed_kmh,
+                 AVG(wind_direction_deg) AS wind_direction_deg
+          FROM `{project_id}.{DATASET_NAME}.weather_readings`
+          GROUP BY ts, region
+        ) w USING (ts, region)
+        ORDER BY ts
     """
     # JOIN `{project_id}.{DATASET_NAME}.{TABLE_NAME_THREE}` AS fire
     # ON aqi.region = fire.region

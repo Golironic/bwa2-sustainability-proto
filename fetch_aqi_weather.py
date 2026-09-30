@@ -260,9 +260,12 @@ def build_station_row(loc, region_name, headers, cutoff):
     station_lat, station_lon = coords.get("latitude"), coords.get("longitude")
 
     for reading in latest_results:
+        ts = (reading.get("datetime") or {}).get("utc")
+        if ts and parse_ts(ts) < cutoff:
+            continue  # ignore this specific sensor reading if it's stale
+
         param = sensor_meta.get(reading.get("sensorsId"), "")
         value = reading.get("value")
-        ts = (reading.get("datetime") or {}).get("utc")
         if ts and (latest_ts is None or parse_ts(ts) > parse_ts(latest_ts)):
             latest_ts = ts
         rc = reading.get("coordinates")
@@ -418,7 +421,7 @@ def load_rows(rows, table_ref, label):
 # ---- MAIN ----
 def main():
     if not OPENAQ_API_KEY:
-        raise SystemExit("OPENAQ_API_KEY not set - add it to .env")
+        raise RuntimeError("OPENAQ_API_KEY not set - add it to .env")
 
     ensure_dataset()
     aqi_table = ensure_table(TABLE_ID, AQI_SCHEMA)

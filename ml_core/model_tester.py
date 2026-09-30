@@ -43,15 +43,22 @@ if USE_BIGQUERY:
     bq_client = bigquery.Client(credentials=credentials, project=project_id)
 
     sql_query = f"""
-        SELECT 
-            timestamp, aqi_value, region,
-            SAFE_CAST(JSON_VALUE(other_pollutants, '$.temperature') AS FLOAT64) AS temperature_aqi,
-            SAFE_CAST(JSON_VALUE(other_pollutants, '$.wind_speed') AS FLOAT64) AS wind_speed_aqi,
-            SAFE_CAST(JSON_VALUE(other_pollutants, '$.relativehumidity') AS FLOAT64) AS humidity_aqi,
-            SAFE_CAST(JSON_VALUE(other_pollutants, '$.wind_direction') AS FLOAT64) AS wind_direction_aqi
-        FROM `{project_id}.air_quality.aqi_readings`
-        WHERE timestamp IS NOT NULL AND aqi_value IS NOT NULL
-        ORDER BY timestamp ASC
+        SELECT a.ts AS timestamp, a.aqi_value, a.region,
+               w.temperature_c AS temperature_aqi, w.humidity_pct AS humidity_aqi, w.wind_speed_kmh AS wind_speed_aqi, w.wind_direction_deg AS wind_direction_aqi
+        FROM (
+          SELECT TIMESTAMP_TRUNC(timestamp, HOUR) AS ts, region, AVG(aqi_value) AS aqi_value
+          FROM `{project_id}.air_quality.aqi_readings`
+          WHERE aqi_value IS NOT NULL
+          GROUP BY ts, region
+        ) a
+        JOIN (
+          SELECT TIMESTAMP_TRUNC(timestamp, HOUR) AS ts, region, AVG(temperature_c) AS temperature_c,
+                 AVG(humidity_pct) AS humidity_pct, AVG(wind_speed_kmh) AS wind_speed_kmh,
+                 AVG(wind_direction_deg) AS wind_direction_deg
+          FROM `{project_id}.air_quality.weather_readings`
+          GROUP BY ts, region
+        ) w USING (ts, region)
+        ORDER BY ts
     """
     df = bq_client.query(sql_query).to_dataframe()
 else:

@@ -154,7 +154,11 @@ def get_forecast():
         FROM `{BQ_PROJECT_ID}.{BQ_DATASET}.forecast`
         ORDER BY forecast_timestamp
     """
-    return _safe_bq_query(client, query, "forecast", warn_if_empty=False)
+    df = _safe_bq_query(client, query, "forecast", warn_if_empty=False)
+    if "confidence_interval" in df.columns:
+        df["confidence_low"] = df["confidence_interval"].apply(lambda x: x.get("lower") if isinstance(x, dict) else None)
+        df["confidence_high"] = df["confidence_interval"].apply(lambda x: x.get("upper") if isinstance(x, dict) else None)
+    return df
 
 
 def submit_citizen_report(report: dict, photo_file=None, voice_file=None):

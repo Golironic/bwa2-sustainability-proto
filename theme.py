@@ -58,7 +58,8 @@ ICONS = {
 
 def get_aqi_category(value):
     """Returns (label, color) for a raw 0-500 AQI value."""
-    if value is None:
+    import math
+    if value is None or (isinstance(value, float) and math.isnan(value)):
         return "Unknown", TEXT_SECONDARY
     for limit, label, color in BREAKPOINTS:
         if value <= limit:
