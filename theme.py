@@ -58,7 +58,8 @@ ICONS = {
 
 def get_aqi_category(value):
     """Returns (label, color) for a raw 0-500 AQI value."""
-    if value is None:
+    import math
+    if value is None or (isinstance(value, float) and math.isnan(value)):
         return "Unknown", TEXT_SECONDARY
     for limit, label, color in BREAKPOINTS:
         if value <= limit:
@@ -155,10 +156,11 @@ a:focus-visible, button:focus-visible, [tabindex]:focus-visible {{
   border: 1px solid {BORDER};
 }}
 .stTabs [data-baseweb="tab"] {{
-  height: 42px;
+  height: 52px;
   border-radius: 8px;
   color: {TEXT_SECONDARY};
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 1.25rem !important; /* Heavily increased font size */
   background: transparent;
   transition: color 0.15s ease, background 0.15s ease;
 }}
@@ -377,6 +379,51 @@ label, [data-testid="stWidgetLabel"] p {{ color: {TEXT_SECONDARY} !important; }}
 .status-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }}
 
 .section-divider {{ border: none; border-top: 1px solid {BORDER}; margin: 1.1rem 0; }}
+
+/* heavily improved ui animations */
+@keyframes slideUpFade {{
+    0% {{ opacity: 0; transform: translateY(20px) scale(0.98); }}
+    100% {{ opacity: 1; transform: translateY(0) scale(1); }}
+}}
+@keyframes gentlePulse {{
+    0% {{ box-shadow: 0 0 0 0 rgba(255,255,255,0.2); }}
+    70% {{ box-shadow: 0 0 0 10px rgba(255,255,255,0); }}
+    100% {{ box-shadow: 0 0 0 0 rgba(255,255,255,0); }}
+}}
+.stTabs [data-baseweb="tab-panel"] {{
+    animation: slideUpFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}}
+[data-testid="stMetricValue"] {{
+    animation: slideUpFade 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}}
+.stat-card {{
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    opacity: 0;
+    animation: slideUpFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}}
+/* Stagger stat cards */
+.stat-row > div:nth-child(1) .stat-card {{ animation-delay: 0.1s; }}
+.stat-row > div:nth-child(2) .stat-card {{ animation-delay: 0.2s; }}
+.stat-row > div:nth-child(3) .stat-card {{ animation-delay: 0.3s; }}
+.stat-row > div:nth-child(4) .stat-card {{ animation-delay: 0.4s; }}
+
+.stat-card:hover {{
+    transform: translateY(-5px);
+    box-shadow: 0 12px 30px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+}}
+.alert-row {{
+    opacity: 0;
+    animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}}
+.alert-row:nth-child(1) {{ animation-delay: 0.1s; }}
+.alert-row:nth-child(2) {{ animation-delay: 0.2s; }}
+.alert-row:nth-child(3) {{ animation-delay: 0.3s; }}
+.alert-row:nth-child(4) {{ animation-delay: 0.4s; }}
+.alert-row:nth-child(5) {{ animation-delay: 0.5s; }}
+
+.map-pin {{
+    animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}}
 </style>
 """
 

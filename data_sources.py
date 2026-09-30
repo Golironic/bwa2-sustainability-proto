@@ -100,7 +100,7 @@ def get_fire_hotspots():
         return mock_data.get_mock_fire_hotspots()
     client = _get_bq_client()
     query = f"""
-        SELECT location.lat AS lat, location.lon AS lon,
+        SELECT location.lat AS lat, location.lng AS lon,
                timestamp, confidence, brightness, source
         FROM `{BQ_PROJECT_ID}.{BQ_DATASET}.fire_hotspots`
         WHERE timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
@@ -154,7 +154,11 @@ def get_forecast():
         FROM `{BQ_PROJECT_ID}.{BQ_DATASET}.forecast`
         ORDER BY forecast_timestamp
     """
-    return _safe_bq_query(client, query, "forecast", warn_if_empty=False)
+    df = _safe_bq_query(client, query, "forecast", warn_if_empty=False)
+    if "confidence_interval" in df.columns:
+        df["confidence_low"] = df["confidence_interval"].apply(lambda x: x.get("lower") if isinstance(x, dict) else None)
+        df["confidence_high"] = df["confidence_interval"].apply(lambda x: x.get("upper") if isinstance(x, dict) else None)
+    return df
 
 
 def submit_citizen_report(report: dict, photo_file=None, voice_file=None):

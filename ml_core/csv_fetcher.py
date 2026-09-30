@@ -1,13 +1,13 @@
-import requests
-import pandas as pd
-from dotenv import load_dotenv
+import time
 from pathlib import Path
 
-load_dotenv()
+import pandas as pd
+import requests
 
-# This points to the ml_core/ folder itself
-ML_DIR = Path(__file__).resolve().parent
-CSV_PATH = ML_DIR / "aqi_weather_historical.csv"
+try:
+    from ml_core.config import CSV_PATH
+except ImportError:  # run directly from inside ml_core/
+    from config import CSV_PATH
 
 # Setup target regions and coordinates
 REGIONS = {
@@ -31,21 +31,53 @@ REGIONS = {
 START_DATE = "2024-01-01"
 END_DATE = "2026-08-31"
 
+REQUEST_TIMEOUT = 120   # seconds
+MAX_RETRIES = 4
+
+
+def get_json(url, params, label):
+    """GET with timeout, HTTP status check and retry/backoff (Open-Meteo rate limits with 429)."""
+    last_err = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            if resp.status_code == 429 or resp.status_code >= 500:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and data.get("error"):
+                raise ValueError(f"API error: {data.get('reason', data)}")
+            return data
+        except ValueError as e:                 # API said the request itself is bad: don't retry
+            raise RuntimeError(f"{label}: {e}") from None
+        except (requests.RequestException, RuntimeError) as e:
+            last_err = e
+            if attempt < MAX_RETRIES:
+                wait = 5 * 2 ** (attempt - 1)
+                print(f"  {label}: {e}; retrying in {wait}s ({attempt}/{MAX_RETRIES})")
+                time.sleep(wait)
+    raise RuntimeError(f"{label}: failed after {MAX_RETRIES} attempts ({last_err})")
+
+
 def fetch_region_data(region_name, lat, lon, start_date, end_date):
     print(f"Fetching real historical data for {region_name}...")
-    
+
     # 1. Fetch Open-Meteo Historical Weather
-    weather_url = "https://archive-api.open-meteo.com/v1/archive"
-    weather_params = {
-        "latitude": lat,
-        "longitude": lon,
-        "start_date": start_date,
-        "end_date": end_date,
-        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m"
-    }
-    res_w = requests.get(weather_url, params=weather_params).json()
-    hourly_w = res_w.get("hourly", {})
-    
+    res_w = get_json(
+        "https://archive-api.open-meteo.com/v1/archive",
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": start_date,
+            "end_date": end_date,
+            "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m"
+        },
+        f"{region_name} weather",
+    )
+    hourly_w = res_w.get("hourly")
+    if not hourly_w or "time" not in hourly_w:
+        raise RuntimeError(f"{region_name} weather: response had no hourly data: {str(res_w)[:200]}")
+
     df_w = pd.DataFrame({
         "timestamp": hourly_w["time"],
         "temperature": hourly_w["temperature_2m"],
@@ -55,17 +87,21 @@ def fetch_region_data(region_name, lat, lon, start_date, end_date):
     })
 
     # 2. Fetch Open-Meteo Air Quality Reanalysis Data
-    aq_url = "https://air-quality-api.open-meteo.com/v1/air-quality"
-    aq_params = {
-        "latitude": lat,
-        "longitude": lon,
-        "start_date": start_date,
-        "end_date": end_date,
-        "hourly": "us_aqi,pm2_5"
-    }
-    res_aq = requests.get(aq_url, params=aq_params).json()
-    hourly_aq = res_aq.get("hourly", {})
-    
+    res_aq = get_json(
+        "https://air-quality-api.open-meteo.com/v1/air-quality",
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": start_date,
+            "end_date": end_date,
+            "hourly": "us_aqi"
+        },
+        f"{region_name} air quality",
+    )
+    hourly_aq = res_aq.get("hourly")
+    if not hourly_aq or "time" not in hourly_aq:
+        raise RuntimeError(f"{region_name} air quality: response had no hourly data: {str(res_aq)[:200]}")
+
     df_aq = pd.DataFrame({
         "timestamp": hourly_aq["time"],
         "us_aqi": hourly_aq["us_aqi"]
@@ -76,29 +112,35 @@ def fetch_region_data(region_name, lat, lon, start_date, end_date):
     df["region"] = region_name
     return df
 
-# Download for all regions
-all_frames = []
-for region, coords in REGIONS.items():
-    df_region = fetch_region_data(region, coords["lat"], coords["lon"], START_DATE, END_DATE)
-    all_frames.append(df_region)
 
-full_df = pd.concat(all_frames, ignore_index=True)
+def main():
+    # Download for all regions (a failure names the region and stops - no partial CSV)
+    all_frames = []
+    for region, coords in REGIONS.items():
+        all_frames.append(fetch_region_data(region, coords["lat"], coords["lon"], START_DATE, END_DATE))
+        time.sleep(1)  # be polite to the free API
 
-# Drop rows with null values to clean training dataset
-full_df = full_df.dropna(subset=["us_aqi", "temperature", "relativehumidity", "wind_speed", "wind_direction"])
+    full_df = pd.concat(all_frames, ignore_index=True)
 
-print(f"\nFetched total {len(full_df)} hourly records across all regions.")
+    # Drop rows with null values to clean training dataset
+    full_df = full_df.dropna(subset=["us_aqi", "temperature", "relativehumidity", "wind_speed", "wind_direction"])
 
-# --- OPTION A: Save as Local CSV (For quick offline XGBoost training) ---
-csv_df = full_df.rename(columns={
-    "us_aqi": "aqi_value",
-    "temperature": "temperature_aqi",
-    "relativehumidity": "humidity_aqi",
-    "wind_speed": "wind_speed_aqi",
-    "wind_direction": "wind_direction_aqi"
-})
-csv_df.to_csv(str(CSV_PATH), index=False)
-print(f"Saved local dataset to '{CSV_PATH}' for XGBoost training.")
+    print(f"\nFetched total {len(full_df)} hourly records across all regions.")
+
+    # --- OPTION A: Save as Local CSV (For quick offline XGBoost training) ---
+    csv_df = full_df.rename(columns={
+        "us_aqi": "aqi_value",
+        "temperature": "temperature_aqi",
+        "relativehumidity": "humidity_aqi",
+        "wind_speed": "wind_speed_aqi",
+        "wind_direction": "wind_direction_aqi"
+    })
+    csv_df.to_csv(str(CSV_PATH), index=False)
+    print(f"Saved local dataset to '{CSV_PATH}' for XGBoost training.")
+
+
+if __name__ == "__main__":
+    main()
 
 
 # --- OPTION B: Load to GCP BigQuery (Matches your SQL schema) ---
@@ -138,7 +180,6 @@ print(f"Saved local dataset to '{CSV_PATH}' for XGBoost training.")
 #             bigquery.SchemaField("region", "STRING"),
 #             bigquery.SchemaField("other_pollutants", "JSON"),
 #         ],
-#         write_disposition="WRITE_TRUNCATE"  # Replaces existing baseline sample data
 #     )
 
 #     job = bq_client.load_table_from_dataframe(df_bq, table_ref, job_config=job_config)
