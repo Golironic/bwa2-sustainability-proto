@@ -12,7 +12,7 @@ except ImportError:  # run directly from inside ml_core/
     from config import MODEL_PATH, CATEGORIES_PATH, CSV_PATH, FEATURE_COLS, TARGET_COL
     from features import add_features, assign_split
 
-USE_BIGQUERY = True
+USE_BIGQUERY = False  # Set to True if pulling directly from BigQuery
 
 
 def load_raw_data() -> pd.DataFrame:
