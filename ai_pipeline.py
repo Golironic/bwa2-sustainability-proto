@@ -1,13 +1,14 @@
 import os
 import io
 import logging
+import re
 import requests
 import pandas as pd
 from urllib.parse import urlparse
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, Literal
 from dotenv import load_dotenv
 from PIL import Image
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from google import genai
 from google.genai import types
@@ -22,6 +23,8 @@ load_dotenv()
 # --- Logging Setup ---
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+GEMINI_TIMEOUT_MS = 60_000  # HttpOptions.timeout is in milliseconds
 
 # --- Global Lazy Singletons ---
 _aqi_caller: Optional[AQICaller] = None
@@ -44,7 +47,10 @@ def get_gemini_client() -> genai.Client:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY environment variable is not set.")
-        _gemini_client = genai.Client(api_key=api_key)
+        _gemini_client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
+        )
     return _gemini_client
 
 
@@ -67,8 +73,14 @@ def get_firestore_db() -> FirestoreClient:
 
 class CitizenReportSchema(BaseModel):
     detected_issue: str
-    severity: int = Field(..., ge=1, le=5, description="Severity score from 1 to 5")
+    severity: int = Field(..., description="Severity score from 1 (minor) to 5 (critical/hazardous)")
     description: str
+
+    @field_validator("severity")
+    @classmethod
+    def clamp_severity(cls, v: int) -> int:
+        # An out-of-range score is clamped instead of failing the whole analysis
+        return max(1, min(5, v))
 
 
 def analyze_citizen_report(image_input: Union[str, bytes], user_text: str = "") -> Optional[CitizenReportSchema]:
@@ -86,7 +98,11 @@ def analyze_citizen_report(image_input: Union[str, bytes], user_text: str = "") 
 
         img.thumbnail((800, 800))
 
-        sanitized_user_text = user_text.replace("</citizen_description>", "").strip() if user_text else "None provided"
+        # Remove angle brackets so the text can't forge or close the <citizen_description> tag
+        # (a single .replace() of the closing tag can be bypassed by nesting), and cap the length.
+        sanitized_user_text = (
+            re.sub(r"[<>]", "", str(user_text)).strip()[:1000] or "None provided"
+        ) if user_text else "None provided"
 
         # Moved core logic & anti-injection guards into system instructions
         system_instruction = """
@@ -241,6 +257,8 @@ def process_and_save_report(doc_id: str, collection_name: str) -> Dict[str, Any]
         return {"status": "error", "message": "Failed to analyze image with Gemini"}
 
     updated_id = save_to_firestore(collection_name, doc_id, analysis_result)
+    if updated_id is None:
+        return {"status": "error", "message": "Failed to save analysis to Firestore"}
 
     return {
         "status": "success",
