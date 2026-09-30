@@ -76,7 +76,7 @@ MAX_STALENESS_HOURS = 3
 
 # Our zone -> the model's trained region category. See caveat 1 above.
 ZONE_TO_MODEL_REGION = {
-    "Delhi-NCR": "Delhi",       # not an exact match - same centre coordinates only
+    "Delhi-NCR": "Delhi-NCR",
     "Punjab": "Punjab",
     "Gandhinagar": "Gandhinagar",
     "Mumbai": "Mumbai",
@@ -224,21 +224,11 @@ def run(dry_run=False):
         print(f"(dry run: {len(all_rows)} rows NOT written)")
         return len(all_rows)
 
-    zones = sorted({r["zone_id"] for r in all_rows})
-    try:
-        client.query(
-            f"DELETE FROM `{FORECAST_TABLE}` WHERE zone_id IN UNNEST(@zones)",
-            job_config=bigquery.QueryJobConfig(query_parameters=[
-                bigquery.ArrayQueryParameter("zones", "STRING", zones)]),
-        ).result()
-    except NotFound:
-        pass  # first run: the load below creates the table
-
     job = client.load_table_from_json(
         all_rows, FORECAST_TABLE,
         job_config=bigquery.LoadJobConfig(
             schema=FORECAST_SCHEMA,
-            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
             source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
         ),
     )
