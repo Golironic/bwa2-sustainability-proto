@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -7,11 +7,19 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 from streamlit_geolocation import streamlit_geolocation
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import data_sources as ds
 import theme
 
 st.set_page_config(page_title="Atmosphere Console", page_icon="🌫️", layout="wide")
+
+import os
+mb_key = os.environ.get("MAPBOX_API_KEY", "")
+if mb_key.startswith('"') and mb_key.endswith('"'): mb_key = mb_key[1:-1]
+
 st.markdown(theme.CUSTOM_CSS, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
@@ -56,7 +64,8 @@ aqi_df = ds.get_aqi_readings()
 fire_df = ds.get_fire_hotspots()
 reports_df = ds.get_citizen_reports()
 
-avg_aqi = float(aqi_df["aqi_value"].mean()) if not aqi_df.empty else 0.0
+mean_val = aqi_df["aqi_value"].mean() if not aqi_df.empty else 0.0
+avg_aqi = float(mean_val) if not pd.isna(mean_val) else 0.0
 st.markdown(theme.render_sky_strip(avg_aqi), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
@@ -80,69 +89,144 @@ tab_map, tab_forecast, tab_alerts, tab_report = st.tabs(
     ["🗺️  Map", "📈  Forecast", "🚨  Alerts", "📝  Report an Issue"]
 )
 
+forecast_df = ds.get_forecast()
+
 # ---------------------------------------------------------------------
 # Map
 # ---------------------------------------------------------------------
 with tab_map:
-    with st.container(border=True):
-        st.markdown(theme.panel_heading("Live Map"), unsafe_allow_html=True)
-        col1, col2, col3 = st.columns(3)
-        show_aqi = col1.checkbox("AQI stations", value=True)
-        show_fire = col2.checkbox("Fire hotspots", value=True)
-        show_reports = col3.checkbox("Citizen reports", value=True)
+    st.markdown(theme.panel_heading("Live Map"), unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    show_aqi = col1.checkbox("AQI stations & Forecast", value=True)
+    show_fire = col2.checkbox("Fire hotspots", value=True)
+    show_reports = col3.checkbox("Citizen reports", value=True)
+    
+    # Custom City Navigation & Map Layout
+    map_col, nav_col = st.columns([5, 1])
+    
+    with nav_col:
+        st.markdown("<div class='eyebrow'>Focus Cities</div>", unsafe_allow_html=True)
+        # Use session state to control map center
+        if "map_center" not in st.session_state:
+            st.session_state.map_center = [22.0, 79.0]
+            st.session_state.map_zoom = 5
+        
+        def jump_to(lat, lon, zoom=10):
+            st.session_state.map_center = [lat, lon]
+            st.session_state.map_zoom = zoom
 
-        layers = []
-        all_points = []  # (lon, lat) pairs across every visible, non-empty layer — used to auto-fit the view
+        if st.button("Delhi-NCR"): jump_to(28.6139, 77.2090)
+        if st.button("Punjab"): jump_to(31.1471, 75.3412)
+        if st.button("Gandhinagar"): jump_to(23.2156, 72.6369)
+        if st.button("Mumbai"): jump_to(19.0760, 72.8777)
+        if st.button("All India"): jump_to(22.0, 79.0, 5)
+
+    with map_col:
+        import folium
+        import streamlit.components.v1 as components
+        import os
+        import json
+        
+        # Satellite map without base political borders to avoid disputes
+        m = folium.Map(
+            location=st.session_state.map_center, 
+            zoom_start=st.session_state.map_zoom, 
+            tiles=f"https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{{z}}/{{x}}/{{y}}?access_token={mb_key}",
+            attr="Mapbox",
+            zoom_control=False
+        )
+
+        # Overlay official India boundaries
+        if os.path.exists("india_boundary.geojson"):
+            with open("india_boundary.geojson", "r") as f:
+                geojson_data = json.load(f)
+            folium.GeoJson(
+                geojson_data,
+                name="India Border",
+                style_function=lambda x: {"fillColor": "transparent", "color": "#E8A23D", "weight": 2, "opacity": 0.8}
+            ).add_to(m)
+
+        # Add data layers
         if show_aqi and not aqi_df.empty:
-            aqi_plot = aqi_df.dropna(subset=["lat", "lon"]).copy()
-            if not aqi_plot.empty:
-                aqi_plot["color"] = aqi_plot["aqi_value"].apply(
-                    lambda v: theme.hex_to_rgba(theme.get_aqi_category(v)[1], 190)
-                )
-                layers.append(pdk.Layer(
-                    "ScatterplotLayer", data=aqi_plot, get_position="[lon, lat]",
-                    get_radius=380, get_fill_color="color", stroked=True,
-                    get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
-                ))
-                all_points.extend(zip(aqi_plot["lon"], aqi_plot["lat"]))
+            next_hour = {}
+            if not forecast_df.empty:
+                for zone, df_zone in forecast_df.groupby("zone_id"):
+                    fut = df_zone[df_zone["forecast_timestamp"] >= pd.Timestamp.utcnow()]
+                    next_hour[zone] = fut.iloc[0]["predicted_aqi"] if not fut.empty else df_zone.iloc[-1]["predicted_aqi"]
+            
+            ZONES_CENTERS = {
+                "Delhi-NCR": (28.6139, 77.2090),
+                "Punjab": (31.1471, 75.3412),
+                "Gandhinagar": (23.2156, 72.6369),
+                "Mumbai": (19.0760, 72.8777),
+            }
+            
+            def get_nearest_zone(lat, lon):
+                best_zone, best_dist = None, 99999
+                for z, (zlat, zlon) in ZONES_CENTERS.items():
+                    dist = (lat - zlat)**2 + (lon - zlon)**2
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_zone = z
+                return best_zone if best_dist < 3.0 else ""
+
+            for _, r in aqi_df.dropna(subset=["lat", "lon"]).iterrows():
+                val = r["aqi_value"]
+                cat, hex_color = theme.get_aqi_category(val)
+                
+                nearest_zone = get_nearest_zone(r["lat"], r["lon"])
+                pred_val = next_hour.get(nearest_zone, "--")
+                pred_str = f"{pred_val:.0f}" if isinstance(pred_val, float) else pred_val
+                
+                html = f"""
+                <div class="map-pin" style="background-color: {hex_color}ee; border: 2px solid white; border-radius: 8px; 
+                            padding: 4px; color: #fff; font-family: sans-serif; font-size: 12px;
+                            font-weight: bold; text-align: center; width: 80px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards, gentlePulse 2s infinite ease-out;">
+                    <div>AQI: {val:.0f}</div>
+                    <div style="font-size: 10px; font-weight: normal; opacity: 0.9;">Pred: {pred_str}</div>
+                </div>
+                """
+                folium.Marker(
+                    location=[r["lat"], r["lon"]],
+                    icon=folium.DivIcon(html=html, icon_size=(80, 36), icon_anchor=(40, 18)),
+                    tooltip=f"Station: {r.get('station_id', 'Unknown')}"
+                ).add_to(m)
+
         if show_fire and not fire_df.empty:
-            fire_plot = fire_df.dropna(subset=["lat", "lon"]).copy()
-            if not fire_plot.empty:
-                fire_plot["color"] = [theme.hex_to_rgba(theme.EMBER, 210) for _ in range(len(fire_plot))]
-                layers.append(pdk.Layer(
-                    "ScatterplotLayer", data=fire_plot, get_position="[lon, lat]",
-                    get_radius=340, get_fill_color="color", stroked=True,
-                    get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
-                ))
-                all_points.extend(zip(fire_plot["lon"], fire_plot["lat"]))
+            for _, r in fire_df.dropna(subset=["lat", "lon"]).iterrows():
+                folium.CircleMarker(
+                    location=[r["lat"], r["lon"]],
+                    radius=4, color=theme.EMBER, fill=True, fill_opacity=0.8, weight=1
+                ).add_to(m)
+
         if show_reports and not reports_df.empty:
-            reports_plot = reports_df.dropna(subset=["lat", "lon"]).copy()
-            if not reports_plot.empty:
-                reports_plot["color"] = reports_plot["severity"].fillna(1).apply(
-                    lambda s: theme.hex_to_rgba(theme.get_severity_color(s), 210)
-                )
-                layers.append(pdk.Layer(
-                    "ScatterplotLayer", data=reports_plot, get_position="[lon, lat]",
-                    get_radius=300, get_fill_color="color", stroked=True,
-                    get_line_color=[18, 21, 26, 200], line_width_min_pixels=1, pickable=True,
-                ))
-                all_points.extend(zip(reports_plot["lon"], reports_plot["lat"]))
+            for _, r in reports_df.dropna(subset=["lat", "lon"]).iterrows():
+                sev_color = theme.get_severity_color(r.get("severity", 1))
+                folium.CircleMarker(
+                    location=[r["lat"], r["lon"]],
+                    radius=6, color=sev_color, fill=True, fill_opacity=1, weight=2,
+                    tooltip=f"Report: Severity {r.get('severity', 1)}"
+                ).add_to(m)
 
-        if all_points:
-            # Auto-fit the view to wherever the real data actually is, instead
-            # of a fixed fallback point that only made sense for aqi_df.
-            view_state = pdk.data_utils.compute_view(list(all_points))
-            view_state.zoom = min(view_state.zoom, 12)  # don't over-zoom for a single point/tight cluster
-        else:
-            view_state = pdk.ViewState(latitude=28.6139, longitude=77.2090, zoom=10)
+        # Inject CSS into the Folium iframe for animations
+        map_css = """
+        <style>
+        @keyframes slideUpFade {
+            0% { opacity: 0; transform: translateY(20px) scale(0.98); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes gentlePulse {
+            0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(255,255,255,0); }
+            100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+        }
+        </style>
+        """
+        m.get_root().html.add_child(folium.Element(map_css))
 
-        st.pydeck_chart(pdk.Deck(
-            map_style="dark",
-            initial_view_state=view_state,
-            layers=layers,
-            tooltip={"text": "AQI/Severity data point"},
-        ))
-        st.markdown(theme.map_legend(), unsafe_allow_html=True)
+        # Render static HTML for extremely fast performance
+        components.html(m.get_root().render(), height=500)
 
 # ---------------------------------------------------------------------
 # Forecast
@@ -150,7 +234,6 @@ with tab_map:
 with tab_forecast:
     with st.container(border=True):
         st.markdown(theme.panel_heading("AQI Forecast"), unsafe_allow_html=True)
-        forecast_df = ds.get_forecast()
         if forecast_df.empty:
             st.markdown(
                 theme.empty_state("No forecast data yet — this fills in once Person 2's Vertex AI model runs (Day 2)."),
@@ -158,21 +241,31 @@ with tab_forecast:
             )
         else:
             fig = go.Figure()
-            if {"confidence_low", "confidence_high"}.issubset(forecast_df.columns):
+            colors = [theme.ACCENT, theme.GOOD, theme.SENSITIVE, theme.UNHEALTHY, theme.HAZARDOUS]
+            
+            for i, (zone, df_zone) in enumerate(forecast_df.groupby("zone_id")):
+                df_zone = df_zone.sort_values("forecast_timestamp")
+                color = colors[i % len(colors)]
+                
+                if {"confidence_low", "confidence_high"}.issubset(df_zone.columns):
+                    r, g, b, _ = theme.hex_to_rgba(color)
+                    fig.add_trace(go.Scatter(
+                        x=pd.concat([df_zone["forecast_timestamp"], df_zone["forecast_timestamp"][::-1]]),
+                        y=pd.concat([df_zone["confidence_high"], df_zone["confidence_low"][::-1]]),
+                        fill="toself", fillcolor=f"rgba({r},{g},{b},0.12)",
+                        line=dict(width=0), hoverinfo="skip", showlegend=False,
+                    ))
                 fig.add_trace(go.Scatter(
-                    x=pd.concat([forecast_df["forecast_timestamp"], forecast_df["forecast_timestamp"][::-1]]),
-                    y=pd.concat([forecast_df["confidence_high"], forecast_df["confidence_low"][::-1]]),
-                    fill="toself", fillcolor="rgba(232,162,61,0.12)",
-                    line=dict(width=0), hoverinfo="skip", showlegend=False,
+                    x=df_zone["forecast_timestamp"], y=df_zone["predicted_aqi"],
+                    mode="lines", line=dict(color=color, width=3, shape="spline"), name=zone,
+                    connectgaps=True
                 ))
-            fig.add_trace(go.Scatter(
-                x=forecast_df["forecast_timestamp"], y=forecast_df["predicted_aqi"],
-                mode="lines", line=dict(color=theme.ACCENT, width=3, shape="spline"), name="Predicted AQI",
-            ))
+                
             fig.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 font=dict(family="IBM Plex Sans", color=theme.TEXT_SECONDARY),
-                margin=dict(l=10, r=10, t=10, b=10), height=360, showlegend=False,
+                margin=dict(l=10, r=10, t=10, b=10), height=360, showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 xaxis=dict(gridcolor=theme.BORDER, showline=False, title=None),
                 yaxis=dict(gridcolor=theme.BORDER, title="AQI", zeroline=False),
             )
@@ -261,7 +354,8 @@ with tab_report:
             m = folium.Map(
                 location=[st.session_state.report_lat, st.session_state.report_lon],
                 zoom_start=12,
-                tiles="CartoDB dark_matter",
+                tiles=f"https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{{z}}/{{x}}/{{y}}?access_token={mb_key}",
+                attr="Mapbox",
             )
             folium.Marker(
                 [st.session_state.report_lat, st.session_state.report_lon],
@@ -299,7 +393,7 @@ with tab_report:
                 "category": category,
                 "text": text,
                 "language": language,
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
             }
             ds.submit_citizen_report(report, photo_file=photo, voice_file=voice)
-            st.success("Report submitted. Person 2's Gemini pipeline will pick it up on the next run.")
+            st.success("Report submitted.")
