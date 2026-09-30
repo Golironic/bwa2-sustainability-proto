@@ -52,7 +52,6 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from google.api_core.exceptions import NotFound
 
 import pandas as pd
 from google.cloud import bigquery
@@ -69,14 +68,13 @@ DATASET_ID = "air_quality"
 FORECAST_TABLE = f"{PROJECT_ID}.{DATASET_ID}.forecast"
 
 HORIZON_HOURS = 24
-HISTORY_HOURS = 72
-MAX_GAP_HOURS = 3
-MIN_HISTORY_HOURS = 25
+HISTORY_HOURS = 72       # pulled with margin so resampling/continuity checks have room
+MAX_GAP_HOURS = 50        # refuse to forecast a zone with any gap in its history bigger than this
 MAX_STALENESS_HOURS = 3
 
 # Our zone -> the model's trained region category. See caveat 1 above.
 ZONE_TO_MODEL_REGION = {
-    "Delhi-NCR": "Delhi-NCR",
+    "Delhi-NCR": "Delhi",       # not an exact match - same centre coordinates only
     "Punjab": "Punjab",
     "Gandhinagar": "Gandhinagar",
     "Mumbai": "Mumbai",
@@ -123,34 +121,31 @@ def load_zone_history(client, zone, hours):
     return client.query(query).to_dataframe()
 
 
-def prepare_hourly_series(df, max_gap_hours=MAX_GAP_HOURS, min_hours=MIN_HISTORY_HOURS):
-    """Strict hourly series built from the newest gap-free stretch of data.
+def prepare_hourly_series(df, max_gap_hours=MAX_GAP_HOURS):
+    """Resample to a strict hourly grid and refuse silently-wrong lag features.
 
-    Small gaps (<= max_gap_hours) are bridged by forward-fill. Any bigger gap
-    ends a segment; only the newest segment is kept, so nothing older than the
-    last big gap can leak into the lag/rolling features.
-    Returns (clean_df, None) or (None, reason).
+    Returns (clean_df, None) on success, or (None, reason) if the data can't
+    be trusted. A gap bigger than max_gap_hours is a hard failure, not a fill -
+    AQICaller's .shift()/.rolling() work by ROW POSITION, so a silently
+    filled long gap would make "24 hours ago" actually mean something else.
     """
     if df is None or df.empty or len(df) < 2:
         return None, "no data"
     df = df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    df = df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+    df = df.sort_values("timestamp").drop_duplicates("timestamp")
 
-    # Start a new segment after each gap too big to bridge; keep the last one.
-    gap_h = df["timestamp"].diff().dt.total_seconds() / 3600.0
-    segment = (gap_h > max_gap_hours).cumsum()
-    df = df[segment == segment.iloc[-1]]
+    deltas_h = df["timestamp"].diff().dt.total_seconds().dropna() / 3600.0
+    if (deltas_h > max_gap_hours).any():
+        return None, f"gap of {deltas_h.max():.1f}h in the history (max allowed {max_gap_hours}h)"
 
-    full_idx = pd.date_range(df["timestamp"].min(), df["timestamp"].max(),
-                             freq="h", name="timestamp")
-    hourly = df.set_index("timestamp").reindex(full_idx).ffill(limit=max_gap_hours)
+    full_idx = pd.date_range(df["timestamp"].min(), df["timestamp"].max(), freq="h")
+    hourly = df.set_index("timestamp").reindex(full_idx)
+    hourly = hourly.ffill(limit=max_gap_hours)  # smooths only the small, already-approved gaps
     if hourly.isna().any().any():
         return None, "gaps remained after fill"
-    if len(hourly) < min_hours:
-        return None, (f"only {len(hourly)}h of continuous history since the last "
-                      f"gap > {max_gap_hours}h (need {min_hours}h)")
-    return hourly.reset_index(), None
+    hourly = hourly.reset_index().rename(columns={"index": "timestamp"})
+    return hourly, None
 
 
 def forecast_zone(caller, zone, model_region, raw_df, now):
@@ -164,6 +159,9 @@ def forecast_zone(caller, zone, model_region, raw_df, now):
     if now - latest_ts > timedelta(hours=MAX_STALENESS_HOURS):
         print(f"  {zone}: SKIPPED (latest reading is {latest_ts}, too old)")
         return None
+    if len(hourly) < 25:
+        print(f"  {zone}: SKIPPED (need 25h of continuous history, have {len(hourly)})")
+        return None
 
     working = hourly.rename(columns={
         "temperature_c": "temperature_aqi", "humidity_pct": "humidity_aqi",
@@ -176,9 +174,7 @@ def forecast_zone(caller, zone, model_region, raw_df, now):
     last_weather = working.iloc[-1][["temperature_aqi", "humidity_aqi", "wind_speed_aqi", "wind_direction_aqi"]].to_dict()
 
     rows = []
-    lag_h = max(0, int((now - latest_ts).total_seconds() // 3600))
-    steps = HORIZON_HOURS + lag_h
-    for h in range(1, steps + 1):
+    for h in range(1, HORIZON_HOURS + 1):
         try:
             pred = caller.predict(working)
         except Exception as e:
@@ -188,16 +184,15 @@ def forecast_zone(caller, zone, model_region, raw_df, now):
         ts = latest_ts + timedelta(hours=h)
         new_row = {"timestamp": ts, "region": model_region, "aqi_value": pred, **last_weather}
         working = pd.concat([working, pd.DataFrame([new_row])[MODEL_INPUT_COLS]], ignore_index=True)
-        if ts > now:
-            rows.append({
-                "zone_id": zone,
-                "forecast_timestamp": ts.isoformat(),
-                "predicted_aqi": round(pred, 1),
-                # No confidence interval yet - that needs a real residual-std number
-                # from Person 2's model_tester.py (its printed RMSE), not a guess.
-                "confidence_interval": {"lower": None, "upper": None},
-                "generated_at": now.isoformat(),
-            })
+        rows.append({
+            "zone_id": zone,
+            "forecast_timestamp": ts.isoformat(),
+            "predicted_aqi": round(pred, 1),
+            # No confidence interval yet - that needs a real residual-std number
+            # from Person 2's model_tester.py (its printed RMSE), not a guess.
+            "confidence_interval": {"lower": None, "upper": None},
+            "generated_at": now.isoformat(),
+        })
     return rows
 
 
@@ -222,7 +217,7 @@ def run(dry_run=False):
     if dry_run:
         print(json.dumps(all_rows[:2], indent=2))
         print(f"(dry run: {len(all_rows)} rows NOT written)")
-        return len(all_rows)
+        return 0
 
     job = client.load_table_from_json(
         all_rows, FORECAST_TABLE,
