@@ -94,27 +94,40 @@ REGIONS = {
 }
 
 # ---- BIGQUERY SETUP ----
-client = bigquery.Client(project=PROJECT_ID)
+_client = None
+
+def get_client():
+    """Return a shared BigQuery client, created lazily on first call.
+
+    Keeping construction here (rather than at module level) means that
+    importing this module does NOT open a GCP connection, so local testing
+    and `--help` flags work without credentials.
+    """
+    global _client
+    if _client is None:
+        _client = bigquery.Client(project=PROJECT_ID)
+    return _client
+
 dataset_ref = f"{PROJECT_ID}.{DATASET_ID}"
 
 
 def ensure_dataset():
     try:
-        client.get_dataset(dataset_ref)
+        get_client().get_dataset(dataset_ref)
     except Exception:
         ds = bigquery.Dataset(dataset_ref)
         ds.location = "asia-south1"
-        client.create_dataset(ds)
+        get_client().create_dataset(ds)
         print(f"Created dataset {dataset_ref}")
 
 
 def ensure_table(table_id, schema):
     table_ref = f"{dataset_ref}.{table_id}"
     try:
-        client.get_table(table_ref)
+        get_client().get_table(table_ref)
     except Exception:
         table = bigquery.Table(table_ref, schema=schema)
-        client.create_table(table)
+        get_client().create_table(table)
         print(f"Created table {table_ref}")
     return table_ref
 
@@ -185,7 +198,7 @@ def existing_keys(table_id, key_fields, hours=DEDUPE_LOOKBACK_HOURS):
         WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {hours} HOUR)
     """
     try:
-        return {tuple(row[f] for f in key_fields) for row in client.query(query).result()}
+        return {tuple(row[f] for f in key_fields) for row in get_client().query(query).result()}
     except Exception as e:
         print(f"  Warning: could not read existing keys from {table_id} ({e}); skipping dedupe")
         return set()
@@ -394,7 +407,7 @@ def load_rows(rows, table_ref, label):
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
     )
-    job = client.load_table_from_json(rows, table_ref, job_config=job_config)
+    job = get_client().load_table_from_json(rows, table_ref, job_config=job_config)
     job.result()
     if job.errors:
         print(f"{label} insert errors:", job.errors)

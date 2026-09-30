@@ -12,7 +12,7 @@ fetch_aqi_weather.py, so:
   - hotspot_scoring.py treats them as modelled data, never as real stations.
 
 Run:
-    python backfill_history.py
+    python backfill_aqi_weather.py
 
 Needs fetch_aqi_weather.py in the same folder (its helpers are reused).
 """
